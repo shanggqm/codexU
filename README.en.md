@@ -75,6 +75,8 @@ Inspect the data source output:
 
 ```sh
 make probe
+build/codexU.app/Contents/MacOS/codexU --dump-local-json
+build/codexU.app/Contents/MacOS/codexU --dump-app-server-json
 ```
 
 ## Package A DMG
@@ -104,7 +106,7 @@ For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md
 
 ## Data Sources
 
-- Account and quota: `codex app-server` JSON-RPC methods `account/read`, `account/rateLimits/read`, and `account/usage/read`.
+- Account and quota: `codex app-server` JSON-RPC methods `account/read` and `account/rateLimits/read`.
 - Local token totals: `~/.codex/state_5.sqlite`.
 - Detailed token splits: `token_count` events in `~/.codex/sessions/**/rollout-*.jsonl` and `~/.codex/archived_sessions/*.jsonl`.
 - Today's board: unarchived and archived Codex threads in the local SQLite database.

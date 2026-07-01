@@ -89,6 +89,8 @@ make install
 
 ```sh
 make probe
+build/codexU.app/Contents/MacOS/codexU --dump-local-json
+build/codexU.app/Contents/MacOS/codexU --dump-app-server-json
 ```
 
 ## 打包 DMG
@@ -118,7 +120,7 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 
 ## 数据来源
 
-- 账户与额度：`codex app-server` 的 `account/read`、`account/rateLimits/read`、`account/usage/read`。
+- 账户与额度：`codex app-server` 的 `account/read`、`account/rateLimits/read`。
 - 本机 token 总量：`~/.codex/state_5.sqlite`。
 - 精细 token 拆分：`~/.codex/sessions/**/rollout-*.jsonl` 和 `~/.codex/archived_sessions/*.jsonl` 中的 `token_count` 事件。
 - 今日任务看板：本机 SQLite 中未归档和今日归档的 Codex 线程。

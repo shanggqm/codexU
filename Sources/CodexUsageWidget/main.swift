@@ -215,6 +215,38 @@ struct UsageSnapshot: Equatable {
             messages: messages
         )
     }
+
+    func mergingLocalData(from localSnapshot: UsageSnapshot) -> UsageSnapshot {
+        UsageSnapshot(
+            refreshedAt: localSnapshot.refreshedAt,
+            account: account,
+            limitId: limitId,
+            limitName: limitName,
+            primary: primary,
+            secondary: secondary,
+            credits: credits,
+            cloudLifetimeTokens: cloudLifetimeTokens,
+            local: localSnapshot.local,
+            taskBoard: localSnapshot.taskBoard,
+            messages: localSnapshot.messages
+        )
+    }
+
+    func mergingAppServerData(from appServerSnapshot: UsageSnapshot) -> UsageSnapshot {
+        UsageSnapshot(
+            refreshedAt: Date(),
+            account: appServerSnapshot.account,
+            limitId: appServerSnapshot.limitId,
+            limitName: appServerSnapshot.limitName,
+            primary: appServerSnapshot.primary,
+            secondary: appServerSnapshot.secondary,
+            credits: appServerSnapshot.credits,
+            cloudLifetimeTokens: appServerSnapshot.cloudLifetimeTokens,
+            local: local,
+            taskBoard: taskBoard,
+            messages: appServerSnapshot.messages + (local == nil ? messages : [])
+        )
+    }
 }
 
 struct DiagnosticItem: Identifiable {
@@ -294,6 +326,8 @@ private struct DetailedUsageAccumulator {
 final class UsageStore: ObservableObject {
     @Published var snapshot: UsageSnapshot = .empty
     @Published var isRefreshing = false
+    @Published var language = WidgetLanguage.storedOrAutomatic()
+    @Published var themeMode = WidgetThemeMode.storedOrAutomatic()
 
     private var fullTimer: Timer?
     private var taskBoardTimer: Timer?
@@ -319,9 +353,15 @@ final class UsageStore: ObservableObject {
         isRefreshing = true
 
         DispatchQueue.global(qos: .utility).async {
-            let snapshot = CodexUsageReader().load()
+            let reader = CodexUsageReader()
+            let localSnapshot = reader.loadLocalData()
             DispatchQueue.main.async {
-                self.snapshot = snapshot
+                self.snapshot = self.snapshot.mergingLocalData(from: localSnapshot)
+            }
+
+            let appServerSnapshot = reader.loadAppServerData()
+            DispatchQueue.main.async {
+                self.snapshot = self.snapshot.mergingAppServerData(from: appServerSnapshot)
                 self.isRefreshing = false
             }
         }
@@ -371,6 +411,45 @@ final class CodexUsageReader {
         return readTaskBoard(messages: &messages)
     }
 
+    func loadLocalData() -> UsageSnapshot {
+        var messages: [String] = []
+        let local = readLocalUsage(messages: &messages)
+        let taskBoard = readTaskBoard(messages: &messages)
+
+        return UsageSnapshot(
+            refreshedAt: Date(),
+            account: nil,
+            limitId: nil,
+            limitName: nil,
+            primary: nil,
+            secondary: nil,
+            credits: nil,
+            cloudLifetimeTokens: nil,
+            local: local,
+            taskBoard: taskBoard,
+            messages: messages
+        )
+    }
+
+    func loadAppServerData() -> UsageSnapshot {
+        var messages: [String] = []
+        let appServer = readAppServer(messages: &messages)
+
+        return UsageSnapshot(
+            refreshedAt: Date(),
+            account: appServer.account,
+            limitId: appServer.limitId,
+            limitName: appServer.limitName,
+            primary: appServer.primary,
+            secondary: appServer.secondary,
+            credits: appServer.credits,
+            cloudLifetimeTokens: appServer.cloudLifetimeTokens,
+            local: nil,
+            taskBoard: nil,
+            messages: messages
+        )
+    }
+
     private struct AppServerSnapshot {
         var account: AccountInfo?
         var limitId: String?
@@ -417,8 +496,9 @@ final class CodexUsageReader {
             }
         }
 
+        let requiredResponseIds: Set<Int> = [2, 3]
         let responseGroup = DispatchGroup()
-        [2, 3, 4].forEach { _ in responseGroup.enter() }
+        requiredResponseIds.forEach { _ in responseGroup.enter() }
 
         let lock = NSLock()
         var buffer = Data()
@@ -452,7 +532,6 @@ final class CodexUsageReader {
                     writeMessage(["method": "initialized"])
                     writeMessage(["id": 2, "method": "account/read", "params": ["refreshToken": false]])
                     writeMessage(["id": 3, "method": "account/rateLimits/read"])
-                    writeMessage(["id": 4, "method": "account/usage/read"])
                 }
                 return
             }
@@ -484,7 +563,7 @@ final class CodexUsageReader {
             }
             lock.unlock()
 
-            if [2, 3, 4].contains(id) {
+            if requiredResponseIds.contains(id) {
                 markComplete(id)
             }
         }
@@ -523,7 +602,7 @@ final class CodexUsageReader {
             ]
         ])
 
-        if responseGroup.wait(timeout: .now() + 12) == .timedOut {
+        if responseGroup.wait(timeout: .now() + 30) == .timedOut {
             lock.lock()
             appServerMessages.append("app-server 响应超时")
             lock.unlock()
@@ -818,11 +897,9 @@ final class CodexUsageReader {
             return cached
         }
 
-        let tokenCountPattern = #""type":"token_count""#
-        let tokenCountNeedle = Data(tokenCountPattern.utf8)
-        if let parsed = parseSessionUsageWithGrep(
+        let tokenCountNeedle = Data(#""type":"token_count""#.utf8)
+        if let parsed = parseLatestSessionUsage(
             url: url,
-            tokenCountPattern: tokenCountPattern,
             tokenCountNeedle: tokenCountNeedle,
             fractionalFormatter: fractionalFormatter,
             plainFormatter: plainFormatter
@@ -894,72 +971,104 @@ final class CodexUsageReader {
         return entry
     }
 
-    private func parseSessionUsageWithGrep(
+    private func parseLatestSessionUsage(
         url: URL,
-        tokenCountPattern: String,
         tokenCountNeedle: Data,
         fractionalFormatter: ISO8601DateFormatter,
         plainFormatter: ISO8601DateFormatter
     ) -> (hasTokenEvents: Bool, tokenEventCount: Int, deltas: [SessionUsageDelta])? {
-        let grepPath = "/usr/bin/grep"
-        guard fileManager.isExecutableFile(atPath: grepPath) else { return nil }
+        // The latest token_count event is cumulative for one session, so tail-read it instead of parsing every intermediate event.
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: grepPath)
-        process.arguments = ["-a", "-F", tokenCountPattern, url.path]
-
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = Pipe()
-
+        let fileSize: UInt64
         do {
-            try process.run()
+            fileSize = try handle.seekToEnd()
         } catch {
             return nil
         }
 
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 || process.terminationStatus == 1 else {
-            return nil
+        guard fileSize > 0 else {
+            return (false, 0, [])
         }
 
-        var buffer = data
+        let chunkSize: UInt64 = 256 * 1024
+        var offset = fileSize
+        var buffer = Data()
+
+        while offset > 0 {
+            let readSize = min(chunkSize, offset)
+            offset -= readSize
+
+            do {
+                try handle.seek(toOffset: offset)
+                guard let chunk = try handle.read(upToCount: Int(readSize)) else { break }
+                var combined = Data()
+                combined.reserveCapacity(chunk.count + buffer.count)
+                combined.append(chunk)
+                combined.append(buffer)
+                buffer = combined
+            } catch {
+                return nil
+            }
+
+            var searchEnd = buffer.endIndex
+            while let newline = buffer[..<searchEnd].lastIndex(of: 10) {
+                let lineStart = buffer.index(after: newline)
+                if lineStart < searchEnd {
+                    let lineData = buffer.subdata(in: lineStart..<searchEnd)
+                    if let parsed = parseSingleSessionUsageLine(
+                        lineData,
+                        tokenCountNeedle: tokenCountNeedle,
+                        fractionalFormatter: fractionalFormatter,
+                        plainFormatter: plainFormatter
+                    ) {
+                        return parsed
+                    }
+                }
+                searchEnd = newline
+            }
+
+            buffer = buffer.subdata(in: buffer.startIndex..<searchEnd)
+        }
+
+        if !buffer.isEmpty {
+            if let parsed = parseSingleSessionUsageLine(
+                buffer,
+                tokenCountNeedle: tokenCountNeedle,
+                fractionalFormatter: fractionalFormatter,
+                plainFormatter: plainFormatter
+            ) {
+                return parsed
+            }
+        }
+
+        return (false, 0, [])
+    }
+
+    private func parseSingleSessionUsageLine(
+        _ lineData: Data,
+        tokenCountNeedle: Data,
+        fractionalFormatter: ISO8601DateFormatter,
+        plainFormatter: ISO8601DateFormatter
+    ) -> (hasTokenEvents: Bool, tokenEventCount: Int, deltas: [SessionUsageDelta])? {
         var previous = TokenBreakdown.zero
         var sawTokenEvent = false
         var tokenEventCount = 0
         var deltas: [SessionUsageDelta] = []
 
-        while let newline = buffer.firstIndex(of: 10) {
-            let lineData = buffer.subdata(in: buffer.startIndex..<newline)
-            buffer.removeSubrange(buffer.startIndex...newline)
-            processUsageLine(
-                lineData,
-                tokenCountNeedle: tokenCountNeedle,
-                fractionalFormatter: fractionalFormatter,
-                plainFormatter: plainFormatter,
-                previous: &previous,
-                sawTokenEvent: &sawTokenEvent,
-                tokenEventCount: &tokenEventCount,
-                deltas: &deltas
-            )
-        }
+        processUsageLine(
+            lineData,
+            tokenCountNeedle: tokenCountNeedle,
+            fractionalFormatter: fractionalFormatter,
+            plainFormatter: plainFormatter,
+            previous: &previous,
+            sawTokenEvent: &sawTokenEvent,
+            tokenEventCount: &tokenEventCount,
+            deltas: &deltas
+        )
 
-        if !buffer.isEmpty {
-            processUsageLine(
-                buffer,
-                tokenCountNeedle: tokenCountNeedle,
-                fractionalFormatter: fractionalFormatter,
-                plainFormatter: plainFormatter,
-                previous: &previous,
-                sawTokenEvent: &sawTokenEvent,
-                tokenEventCount: &tokenEventCount,
-                deltas: &deltas
-            )
-        }
-
-        return (sawTokenEvent, tokenEventCount, deltas)
+        return sawTokenEvent ? (true, tokenEventCount, deltas) : nil
     }
 
     private func processUsageLine(
@@ -1416,8 +1525,6 @@ enum WidgetThemeMode: String, CaseIterable, Equatable {
 struct UsageWidgetView: View {
     @ObservedObject var store: UsageStore
     @Environment(\.colorScheme) private var colorScheme
-    @State private var language = WidgetLanguage.storedOrAutomatic()
-    @State private var themeMode = WidgetThemeMode.storedOrAutomatic()
 
     static let widgetWidth: CGFloat = 820
     static let widgetDefaultHeight: CGFloat = 720
@@ -1426,6 +1533,8 @@ struct UsageWidgetView: View {
 
     private var snapshot: UsageSnapshot { store.snapshot }
     private var primary: RateWindow? { snapshot.primary }
+    private var language: WidgetLanguage { store.language }
+    private var themeMode: WidgetThemeMode { store.themeMode }
     private var effectiveColorScheme: ColorScheme {
         themeMode.preferredColorScheme ?? colorScheme
     }
@@ -1488,12 +1597,12 @@ struct UsageWidgetView: View {
             }
             Spacer()
             ThemeSwitch(themeMode: themeMode, language: language) { selectedMode in
-                themeMode = selectedMode
+                store.themeMode = selectedMode
                 selectedMode.persist()
                 selectedMode.applyAppearance()
             }
             LanguageSwitch(language: language) { selectedLanguage in
-                language = selectedLanguage
+                store.language = selectedLanguage
                 selectedLanguage.persist()
             }
             planPill
@@ -1666,6 +1775,7 @@ struct UsageWidgetView: View {
 
     private var shouldShowEnvironmentChecklist: Bool {
         if snapshot.messages.contains("正在读取 codexU 数据") { return false }
+        if store.isRefreshing, snapshot.local != nil, snapshot.account == nil { return false }
         return (!snapshot.messages.isEmpty && (snapshot.primary == nil || snapshot.local == nil))
             || snapshot.account == nil
             || snapshot.local == nil
@@ -3385,6 +3495,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 @main
 struct codexUMain {
     static func main() {
+        if CommandLine.arguments.contains("--dump-local-json") {
+            dumpJSON(CodexUsageReader().loadLocalData())
+            return
+        }
+
+        if CommandLine.arguments.contains("--dump-app-server-json") {
+            dumpJSON(CodexUsageReader().loadAppServerData())
+            return
+        }
+
         if CommandLine.arguments.contains("--dump-json") {
             dumpJSON(CodexUsageReader().load())
             return
