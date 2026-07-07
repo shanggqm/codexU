@@ -1,6 +1,7 @@
 import Cocoa
 import Carbon.HIToolbox
 import Combine
+import ServiceManagement
 import SwiftUI
 
 struct RateWindow: Equatable {
@@ -505,23 +506,37 @@ final class UsageStore: ObservableObject {
     @Published var snapshot: UsageSnapshot = .empty
     @Published var isRefreshing = false
 
+    private let fullRefreshInterval: TimeInterval = 300
+    private let taskBoardRefreshInterval: TimeInterval = 10
     private var fullTimer: Timer?
     private var taskBoardTimer: Timer?
     private var isRefreshingTaskBoard = false
 
     func start() {
         refresh()
-        fullTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+        fullTimer = Timer.scheduledTimer(withTimeInterval: fullRefreshInterval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
-        taskBoardTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+        fullTimer?.tolerance = 60
+        taskBoardTimer = Timer.scheduledTimer(withTimeInterval: taskBoardRefreshInterval, repeats: true) { [weak self] _ in
             self?.refreshTaskBoard()
         }
+        taskBoardTimer?.tolerance = 2
+    }
+
+    func startMenuBarMode() {
+        refreshQuotaOnly()
+        fullTimer = Timer.scheduledTimer(withTimeInterval: fullRefreshInterval, repeats: true) { [weak self] _ in
+            self?.refreshQuotaOnly()
+        }
+        fullTimer?.tolerance = 60
     }
 
     func stop() {
         fullTimer?.invalidate()
         taskBoardTimer?.invalidate()
+        fullTimer = nil
+        taskBoardTimer = nil
     }
 
     func refresh() {
@@ -530,6 +545,19 @@ final class UsageStore: ObservableObject {
 
         DispatchQueue.global(qos: .utility).async {
             let snapshot = CodexUsageReader().load()
+            DispatchQueue.main.async {
+                self.snapshot = snapshot
+                self.isRefreshing = false
+            }
+        }
+    }
+
+    func refreshQuotaOnly() {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+
+        DispatchQueue.global(qos: .utility).async {
+            let snapshot = CodexUsageReader().loadQuotaSnapshot()
             DispatchQueue.main.async {
                 self.snapshot = snapshot
                 self.isRefreshing = false
@@ -576,6 +604,25 @@ final class CodexUsageReader {
             cloudLifetimeTokens: appServer.cloudLifetimeTokens,
             local: local,
             taskBoard: taskBoard,
+            messages: messages
+        )
+    }
+
+    func loadQuotaSnapshot() -> UsageSnapshot {
+        var messages: [String] = []
+        let appServer = readAppServer(messages: &messages)
+
+        return UsageSnapshot(
+            refreshedAt: Date(),
+            account: appServer.account,
+            limitId: appServer.limitId,
+            limitName: appServer.limitName,
+            primary: appServer.primary,
+            secondary: appServer.secondary,
+            credits: appServer.credits,
+            cloudLifetimeTokens: appServer.cloudLifetimeTokens,
+            local: nil,
+            taskBoard: nil,
             messages: messages
         )
     }
@@ -2404,6 +2451,97 @@ enum WidgetThemeMode: String, CaseIterable, Equatable {
     }
 }
 
+enum MenuBarQuotaStyle: String, CaseIterable, Equatable {
+    case vertical
+    case horizontal
+    case ring
+    case text
+
+    static let storageKey = "codexU.menuBarQuotaStyle"
+
+    static func stored(defaults: UserDefaults = .standard) -> MenuBarQuotaStyle {
+        guard let rawValue = defaults.string(forKey: storageKey),
+              let style = MenuBarQuotaStyle(rawValue: rawValue)
+        else { return .vertical }
+        return style
+    }
+
+    func persist(defaults: UserDefaults = .standard) {
+        defaults.set(rawValue, forKey: Self.storageKey)
+    }
+
+    func title(language: WidgetLanguage) -> String {
+        switch self {
+        case .vertical:
+            return language.text("垂直进度条", "Vertical bars")
+        case .horizontal:
+            return language.text("横向进度条", "Horizontal bars")
+        case .ring:
+            return language.text("环形进度条", "Rings")
+        case .text:
+            return language.text("纯文字", "Text only")
+        }
+    }
+}
+
+enum MenuBarQuotaCountMode: String, CaseIterable, Equatable {
+    case remaining
+    case used
+
+    static let storageKey = "codexU.menuBarQuotaCountMode"
+
+    static func stored(defaults: UserDefaults = .standard) -> MenuBarQuotaCountMode {
+        guard let rawValue = defaults.string(forKey: storageKey),
+              let mode = MenuBarQuotaCountMode(rawValue: rawValue)
+        else { return .remaining }
+        return mode
+    }
+
+    func persist(defaults: UserDefaults = .standard) {
+        defaults.set(rawValue, forKey: Self.storageKey)
+    }
+
+    func title(language: WidgetLanguage) -> String {
+        switch self {
+        case .remaining:
+            return language.text("倒计数：剩余额度", "Countdown: remaining")
+        case .used:
+            return language.text("正计数：已用额度", "Count up: used")
+        }
+    }
+
+    func shortLabel(language: WidgetLanguage) -> String {
+        switch self {
+        case .remaining:
+            return language.text("剩余", "left")
+        case .used:
+            return language.text("已用", "used")
+        }
+    }
+
+    func percent(for window: RateWindow) -> Double {
+        switch self {
+        case .remaining:
+            return window.remainingPercent
+        case .used:
+            return max(0, min(100, window.usedPercent))
+        }
+    }
+}
+
+enum MenuBarQuotaIndicatorPreference {
+    static let storageKey = "codexU.showMenuBarQuotaIndicator"
+
+    static func stored(defaults: UserDefaults = .standard) -> Bool {
+        guard defaults.object(forKey: storageKey) != nil else { return false }
+        return defaults.bool(forKey: storageKey)
+    }
+
+    static func persist(_ isVisible: Bool, defaults: UserDefaults = .standard) {
+        defaults.set(isVisible, forKey: storageKey)
+    }
+}
+
 enum DashboardTab: String, CaseIterable, Equatable, Identifiable {
     case tasks
     case usage
@@ -2424,7 +2562,9 @@ struct UsageWidgetView: View {
     @State private var language = WidgetLanguage.storedOrAutomatic()
     @State private var themeMode = WidgetThemeMode.storedOrAutomatic()
     @State private var selectedDashboardTab: DashboardTab = .tasks
+    @State private var isQuotaIndicatorVisible = MenuBarQuotaIndicatorPreference.stored()
     let onPinnedFrontChange: (Bool) -> Void
+    let onQuotaIndicatorVisibilityChange: (Bool) -> Void
 
     static let widgetWidth: CGFloat = 820
     static let widgetDefaultHeight: CGFloat = 720
@@ -2560,6 +2700,18 @@ struct UsageWidgetView: View {
         let isPinned = windowState.isPinnedToFront
 
         return HStack(spacing: 2) {
+            HeaderActionButton(
+                systemName: isQuotaIndicatorVisible ? "chart.bar.fill" : "chart.bar",
+                isActive: isQuotaIndicatorVisible,
+                help: language.text("显示菜单栏额度", "Show menu bar quota"),
+                accessibilityLabel: language.text("显示菜单栏额度", "Show menu bar quota"),
+                accessibilityValue: isQuotaIndicatorVisible ? language.text("已开启", "On") : language.text("未开启", "Off")
+            ) {
+                isQuotaIndicatorVisible.toggle()
+                MenuBarQuotaIndicatorPreference.persist(isQuotaIndicatorVisible)
+                onQuotaIndicatorVisibilityChange(isQuotaIndicatorVisible)
+            }
+
             HeaderActionButton(
                 systemName: isPinned ? "pin.fill" : "pin",
                 isActive: isPinned,
@@ -5754,48 +5906,34 @@ final class DesktopWidgetWindow: NSPanel {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
+    private struct QuotaRenderState: Equatable {
+        let primary: RateWindow?
+        let secondary: RateWindow?
+        let messages: [String]
+    }
+
     private let store = UsageStore()
     private let windowState = WindowPresentationState()
     private var window: DesktopWidgetWindow?
-    private var statusItem: NSStatusItem?
+    private var mainStatusItem: NSStatusItem?
+    private var quotaStatusItem: NSStatusItem?
     private var globalHotKeyRef: EventHotKeyRef?
     private var globalHotKeyHandler: EventHandlerRef?
     private var isFrontMode = false
+    private var menuBarStyle = MenuBarQuotaStyle.stored()
+    private var quotaCountMode = MenuBarQuotaCountMode.stored()
+    private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         WidgetThemeMode.storedOrAutomatic().applyAppearance()
         debugLog("app launched bundle=\(Bundle.main.bundlePath)")
 
-        let width = UsageWidgetView.widgetWidth
-        let height = UsageWidgetView.widgetDefaultHeight
-        let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let origin = CGPoint(
-            x: max(screenFrame.minX + 16, screenFrame.maxX - width - 28),
-            y: max(screenFrame.minY + 16, screenFrame.maxY - height - 36)
-        )
-
-        let panel = DesktopWidgetWindow(contentRect: NSRect(origin: origin, size: CGSize(width: width, height: height)))
-        panel.delegate = self
-        panel.minSize = CGSize(width: UsageWidgetView.widgetWidth, height: UsageWidgetView.widgetMinHeight)
-        panel.maxSize = CGSize(width: UsageWidgetView.widgetWidth, height: UsageWidgetView.widgetMaxHeight)
-        panel.contentMinSize = panel.minSize
-        panel.contentMaxSize = panel.maxSize
-        panel.contentView = GlassHostingContainer(
-            rootView: UsageWidgetView(
-                store: store,
-                windowState: windowState,
-                onPinnedFrontChange: { [weak self] isPinned in
-                    self?.setPinnedToFront(isPinned)
-                }
-            ),
-            cornerRadius: 24
-        )
-        panel.moveToDesktopLayer()
-        window = panel
-
-        setupStatusItem()
+        createDesktopWidgetWindow()
+        setupMainStatusItem()
+        setQuotaStatusItemVisible(MenuBarQuotaIndicatorPreference.stored())
+        observeStore()
         registerGlobalHotKey()
         store.start()
     }
@@ -5844,7 +5982,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             leaveFrontModeIfNeeded(force: true)
         }
-        updateStatusItemTooltip()
+        updateMainStatusItemTooltip()
     }
 
     private func leaveFrontModeIfNeeded(force: Bool = false) {
@@ -5858,9 +5996,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         toggleWindowLayer()
     }
 
-    private func setupStatusItem() {
+    private func createDesktopWidgetWindow() {
+        let width = UsageWidgetView.widgetWidth
+        let height = UsageWidgetView.widgetDefaultHeight
+        let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let origin = CGPoint(
+            x: max(screenFrame.minX + 16, screenFrame.maxX - width - 28),
+            y: max(screenFrame.minY + 16, screenFrame.maxY - height - 36)
+        )
+
+        let panel = DesktopWidgetWindow(contentRect: NSRect(origin: origin, size: CGSize(width: width, height: height)))
+        panel.delegate = self
+        panel.minSize = CGSize(width: UsageWidgetView.widgetWidth, height: UsageWidgetView.widgetMinHeight)
+        panel.maxSize = CGSize(width: UsageWidgetView.widgetWidth, height: UsageWidgetView.widgetMaxHeight)
+        panel.contentMinSize = panel.minSize
+        panel.contentMaxSize = panel.maxSize
+        panel.contentView = GlassHostingContainer(
+            rootView: UsageWidgetView(
+                store: store,
+                windowState: windowState,
+                onPinnedFrontChange: { [weak self] isPinned in
+                    self?.setPinnedToFront(isPinned)
+                },
+                onQuotaIndicatorVisibilityChange: { [weak self] isVisible in
+                    self?.setQuotaStatusItemVisible(isVisible)
+                }
+            ),
+            cornerRadius: 24
+        )
+        panel.moveToDesktopLayer()
+        window = panel
+    }
+
+    private func setupMainStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem = item
+        mainStatusItem = item
 
         guard let button = item.button else { return }
         if let image = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: "codexU") {
@@ -5869,16 +6039,511 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             button.title = "C"
         }
-        updateStatusItemTooltip()
+        updateMainStatusItemTooltip()
         button.target = self
         button.action = #selector(statusItemClicked)
     }
 
-    private func updateStatusItemTooltip() {
-        guard let button = statusItem?.button else { return }
+    private func updateMainStatusItemTooltip() {
+        guard let button = mainStatusItem?.button else { return }
         button.toolTip = windowState.isPinnedToFront
             ? "codexU：已固定前台，点击或按 ⌘U 取消固定"
             : "codexU：点击临时唤到前台，快捷键 ⌘U"
+    }
+
+    private func setupQuotaStatusItem() {
+        guard quotaStatusItem == nil else {
+            updateQuotaStatusItem()
+            return
+        }
+
+        let item = NSStatusBar.system.statusItem(withLength: menuBarImageSize(for: menuBarStyle).width + 4)
+        quotaStatusItem = item
+
+        guard let button = item.button else { return }
+        button.imagePosition = .imageOnly
+        item.menu = makeQuotaStatusMenu()
+        updateQuotaStatusItem()
+    }
+
+    private func setQuotaStatusItemVisible(_ isVisible: Bool) {
+        MenuBarQuotaIndicatorPreference.persist(isVisible)
+
+        if isVisible {
+            setupQuotaStatusItem()
+        } else if let quotaStatusItem {
+            NSStatusBar.system.removeStatusItem(quotaStatusItem)
+            self.quotaStatusItem = nil
+        }
+    }
+
+    private func observeStore() {
+        store.$snapshot
+            .map { snapshot in
+                QuotaRenderState(
+                    primary: snapshot.primary,
+                    secondary: snapshot.secondary,
+                    messages: snapshot.messages
+                )
+            }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateQuotaStatusItem()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func updateQuotaStatusItem() {
+        guard let button = quotaStatusItem?.button else { return }
+        quotaStatusItem?.length = menuBarImageSize(for: menuBarStyle).width + 4
+        button.image = makeStatusBarImage(snapshot: store.snapshot, style: menuBarStyle)
+        button.toolTip = statusTooltip(snapshot: store.snapshot)
+    }
+
+    private func makeQuotaStatusMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+        populateQuotaStatusMenu(menu)
+        return menu
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        populateQuotaStatusMenu(menu)
+    }
+
+    private func populateQuotaStatusMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+
+        let language = WidgetLanguage.storedOrAutomatic()
+        let snapshot = store.snapshot
+
+        let titleItem = NSMenuItem(title: "codexU", action: nil, keyEquivalent: "")
+        titleItem.isEnabled = false
+        menu.addItem(titleItem)
+        menu.addItem(NSMenuItem.separator())
+
+        let primaryTitle = language.text("5 小时额度", "5-hour quota")
+        let secondaryTitle = language.text("7 天额度", "7-day quota")
+        menu.addItem(disabledMenuItem("\(primaryTitle)：\(quotaMenuText(snapshot.primary, language: language))"))
+        menu.addItem(disabledMenuItem("\(language.text("重置", "Reset"))：\(resetMenuText(snapshot.primary, language: language))"))
+        menu.addItem(disabledMenuItem("\(secondaryTitle)：\(quotaMenuText(snapshot.secondary, language: language))"))
+        menu.addItem(disabledMenuItem("\(language.text("重置", "Reset"))：\(resetMenuText(snapshot.secondary, language: language))"))
+        menu.addItem(disabledMenuItem("\(language.text("刷新时间", "Refreshed"))：\(timeOnly(snapshot.refreshedAt, language: language))"))
+
+        if !snapshot.messages.isEmpty, snapshot.primary == nil || snapshot.secondary == nil {
+            menu.addItem(disabledMenuItem(localizedReaderMessage(snapshot.messages[0], language: language)))
+        }
+
+        menu.addItem(NSMenuItem.separator())
+
+        let styleMenu = NSMenu()
+        for style in MenuBarQuotaStyle.allCases {
+            let item = NSMenuItem(title: style.title(language: language), action: #selector(setMenuBarStyleFromMenu(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = style.rawValue
+            item.state = style == menuBarStyle ? .on : .off
+            styleMenu.addItem(item)
+        }
+        let styleItem = NSMenuItem(title: language.text("显示方式", "Display style"), action: nil, keyEquivalent: "")
+        styleItem.submenu = styleMenu
+        menu.addItem(styleItem)
+
+        let countModeMenu = NSMenu()
+        for mode in MenuBarQuotaCountMode.allCases {
+            let item = NSMenuItem(title: mode.title(language: language), action: #selector(setQuotaCountModeFromMenu(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.rawValue
+            item.state = mode == quotaCountMode ? .on : .off
+            countModeMenu.addItem(item)
+        }
+        let countModeItem = NSMenuItem(title: language.text("计数方式", "Count mode"), action: nil, keyEquivalent: "")
+        countModeItem.submenu = countModeMenu
+        menu.addItem(countModeItem)
+
+        let refreshItem = NSMenuItem(
+            title: store.isRefreshing ? language.text("正在刷新...", "Refreshing...") : language.text("刷新额度", "Refresh quota"),
+            action: #selector(refreshQuotaFromMenu),
+            keyEquivalent: "r"
+        )
+        refreshItem.target = self
+        refreshItem.isEnabled = !store.isRefreshing
+        menu.addItem(refreshItem)
+
+        let launchAtLoginItem = NSMenuItem(
+            title: launchAtLoginMenuTitle(language: language),
+            action: #selector(toggleLaunchAtLoginFromMenu),
+            keyEquivalent: ""
+        )
+        launchAtLoginItem.target = self
+        launchAtLoginItem.state = isLaunchAtLoginEnabled ? .on : .off
+        menu.addItem(launchAtLoginItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        let quitItem = NSMenuItem(title: language.text("退出 codexU", "Quit codexU"), action: #selector(quitFromMenu), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+    }
+
+    private func disabledMenuItem(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    @objc private func setMenuBarStyleFromMenu(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let style = MenuBarQuotaStyle(rawValue: rawValue)
+        else { return }
+        menuBarStyle = style
+        style.persist()
+        updateQuotaStatusItem()
+    }
+
+    @objc private func setQuotaCountModeFromMenu(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let mode = MenuBarQuotaCountMode(rawValue: rawValue)
+        else { return }
+        quotaCountMode = mode
+        mode.persist()
+        updateQuotaStatusItem()
+    }
+
+    @objc private func refreshQuotaFromMenu() {
+        store.refresh()
+    }
+
+    @objc private func toggleLaunchAtLoginFromMenu() {
+        let language = WidgetLanguage.storedOrAutomatic()
+        do {
+            if isLaunchAtLoginEnabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            showLaunchAtLoginError(error, language: language)
+        }
+        updateQuotaStatusItem()
+    }
+
+    @objc private func quitFromMenu() {
+        NSApp.terminate(nil)
+    }
+
+    private var isLaunchAtLoginEnabled: Bool {
+        SMAppService.mainApp.status == .enabled
+    }
+
+    private func launchAtLoginMenuTitle(language: WidgetLanguage) -> String {
+        switch SMAppService.mainApp.status {
+        case .enabled:
+            return language.text("开机自动启动", "Launch at Login")
+        case .requiresApproval:
+            return language.text("开机自动启动（需系统确认）", "Launch at Login (needs approval)")
+        case .notRegistered:
+            return language.text("开机自动启动", "Launch at Login")
+        case .notFound:
+            return language.text("开机自动启动（不可用）", "Launch at Login (unavailable)")
+        @unknown default:
+            return language.text("开机自动启动", "Launch at Login")
+        }
+    }
+
+    private func showLaunchAtLoginError(_ error: Error, language: WidgetLanguage) {
+        let alert = NSAlert()
+        alert.messageText = language.text("无法修改开机自动启动", "Could not change Launch at Login")
+        alert.informativeText = language.text(
+            "请确认 codexU 已安装到 Applications，并在系统设置 > 通用 > 登录项中允许。",
+            "Make sure codexU is installed in Applications, then allow it in System Settings > General > Login Items."
+        ) + "\n\n\(error.localizedDescription)"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: language.text("好", "OK"))
+        alert.runModal()
+    }
+
+    private func statusTooltip(snapshot: UsageSnapshot) -> String {
+        let language = WidgetLanguage.storedOrAutomatic()
+        guard snapshot.primary != nil || snapshot.secondary != nil else {
+            return language.text("codexU：正在读取额度", "codexU: reading quota")
+        }
+
+        return "codexU: \(quotaCountMode.shortLabel(language: language)) · 5h \(quotaPercentText(snapshot.primary)) · 7d \(quotaPercentText(snapshot.secondary))"
+    }
+
+    private func quotaMenuText(_ window: RateWindow?, language: WidgetLanguage) -> String {
+        guard let window else { return language.text("读取中", "Loading") }
+        return "\(quotaPercentText(window)) \(quotaCountMode.shortLabel(language: language))"
+    }
+
+    private func resetMenuText(_ window: RateWindow?, language: WidgetLanguage) -> String {
+        guard let resetsAt = window?.resetsAt else { return language.text("暂无", "Unavailable") }
+        return resetDateTime(resetsAt, language: language)
+    }
+
+    private func quotaPercentText(_ window: RateWindow?) -> String {
+        guard let window else { return "--%" }
+        return "\(Int(quotaCountMode.percent(for: window).rounded()))%"
+    }
+
+    private func quotaNumberText(_ window: RateWindow?) -> String {
+        guard let window else { return "--" }
+        return "\(Int(quotaCountMode.percent(for: window).rounded()))"
+    }
+
+    private func quotaPercentValue(_ window: RateWindow?) -> Double? {
+        guard let window else { return nil }
+        return quotaCountMode.percent(for: window)
+    }
+
+    private func menuBarImageSize(for style: MenuBarQuotaStyle) -> NSSize {
+        switch style {
+        case .vertical:
+            return NSSize(width: 64, height: 18)
+        case .horizontal:
+            return NSSize(width: 142, height: 22)
+        case .ring:
+            return NSSize(width: 54, height: 20)
+        case .text:
+            return NSSize(width: 96, height: 20)
+        }
+    }
+
+    private func primaryQuotaColor(available: Bool) -> NSColor {
+        available ? NSColor.labelColor : NSColor.labelColor.withAlphaComponent(0.38)
+    }
+
+    private func secondaryQuotaColor(available: Bool) -> NSColor {
+        available ? NSColor.labelColor : NSColor.labelColor.withAlphaComponent(0.38)
+    }
+
+    private func makeStatusBarImage(snapshot: UsageSnapshot, style: MenuBarQuotaStyle) -> NSImage {
+        let size = menuBarImageSize(for: style)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+
+        switch style {
+        case .vertical:
+            drawVerticalQuotaBars(snapshot: snapshot, in: NSRect(origin: .zero, size: size))
+        case .horizontal:
+            drawHorizontalQuotaBars(snapshot: snapshot, in: NSRect(origin: .zero, size: size))
+        case .ring:
+            drawQuotaRings(snapshot: snapshot, in: NSRect(origin: .zero, size: size))
+        case .text:
+            drawTextQuota(snapshot: snapshot, in: NSRect(origin: .zero, size: size))
+        }
+
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
+    private func drawVerticalQuotaBars(snapshot: UsageSnapshot, in rect: NSRect) {
+        let trackColor = NSColor.labelColor.withAlphaComponent(0.18)
+        let primaryColor = primaryQuotaColor(available: snapshot.primary != nil)
+        let secondaryColor = secondaryQuotaColor(available: snapshot.secondary != nil)
+        let barWidth: CGFloat = 4
+        let barHeight: CGFloat = 14
+        let y = rect.midY - barHeight / 2
+        let primaryRect = NSRect(x: 2, y: y, width: barWidth, height: barHeight)
+        let secondaryRect = NSRect(x: 30, y: y, width: barWidth, height: barHeight)
+
+        drawVerticalQuotaBar(in: primaryRect, percent: quotaPercentValue(snapshot.primary), trackColor: trackColor, fillColor: primaryColor)
+        drawVerticalQuotaBar(in: secondaryRect, percent: quotaPercentValue(snapshot.secondary), trackColor: trackColor, fillColor: secondaryColor)
+        drawQuotaNumber(quotaNumberText(snapshot.primary), in: NSRect(x: 8, y: 1.7, width: 21, height: 14), color: primaryColor)
+        drawQuotaNumber(quotaNumberText(snapshot.secondary), in: NSRect(x: 36, y: 1.7, width: 21, height: 14), color: secondaryColor)
+    }
+
+    private func drawVerticalQuotaBar(in rect: NSRect, percent: Double?, trackColor: NSColor, fillColor: NSColor) {
+        let trackPath = NSBezierPath(roundedRect: rect, xRadius: rect.width / 2, yRadius: rect.width / 2)
+        trackColor.setFill()
+        trackPath.fill()
+
+        guard let percent else { return }
+        let progress = max(0, min(1, percent / 100))
+        guard progress > 0 else { return }
+        let fillHeight = max(1, rect.height * CGFloat(progress))
+        let fillRect = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: fillHeight)
+        let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: rect.width / 2, yRadius: rect.width / 2)
+        fillColor.setFill()
+        fillPath.fill()
+    }
+
+    private func drawHorizontalQuotaBars(snapshot: UsageSnapshot, in rect: NSRect) {
+        let trackColor = NSColor.labelColor.withAlphaComponent(0.18)
+        let primaryColor = primaryQuotaColor(available: snapshot.primary != nil)
+        let secondaryColor = secondaryQuotaColor(available: snapshot.secondary != nil)
+        let countdownColor = NSColor.labelColor.withAlphaComponent(0.52)
+        let xOffset: CGFloat = 5
+        let barWidth: CGFloat = 38
+        let barHeight: CGFloat = 4
+        let primaryRect = NSRect(x: xOffset + 20, y: 15.0, width: barWidth, height: barHeight)
+        let secondaryRect = NSRect(x: xOffset + 20, y: 2.8, width: barWidth, height: barHeight)
+
+        drawSmallQuotaLabel("5h", in: NSRect(x: xOffset, y: 10.8, width: 17, height: 12), color: primaryColor)
+        drawSmallQuotaLabel("7d", in: NSRect(x: xOffset, y: -1.4, width: 17, height: 12), color: secondaryColor)
+        drawHorizontalQuotaBar(in: primaryRect, percent: quotaPercentValue(snapshot.primary), trackColor: trackColor, fillColor: primaryColor)
+        drawHorizontalQuotaBar(in: secondaryRect, percent: quotaPercentValue(snapshot.secondary), trackColor: trackColor, fillColor: secondaryColor)
+        drawQuotaPercentNumber(quotaPercentText(snapshot.primary), in: NSRect(x: xOffset + 62, y: 10.8, width: 34, height: 12), color: primaryColor)
+        drawQuotaPercentNumber(quotaPercentText(snapshot.secondary), in: NSRect(x: xOffset + 62, y: -1.4, width: 34, height: 12), color: secondaryColor)
+        drawHorizontalCountdown(compactResetCountdown(snapshot.primary), in: NSRect(x: xOffset + 96, y: 11.0, width: 38, height: 11), color: countdownColor)
+        drawHorizontalCountdown(compactResetCountdown(snapshot.secondary), in: NSRect(x: xOffset + 96, y: -1.2, width: 38, height: 11), color: countdownColor)
+    }
+
+    private func drawHorizontalQuotaBar(in rect: NSRect, percent: Double?, trackColor: NSColor, fillColor: NSColor) {
+        let trackPath = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
+        trackColor.setFill()
+        trackPath.fill()
+
+        guard let percent else { return }
+        let progress = max(0, min(1, percent / 100))
+        guard progress > 0 else { return }
+        let fillWidth = max(1, rect.width * CGFloat(progress))
+        let fillRect = NSRect(x: rect.minX, y: rect.minY, width: fillWidth, height: rect.height)
+        let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: rect.height / 2, yRadius: rect.height / 2)
+        fillColor.setFill()
+        fillPath.fill()
+    }
+
+    private func drawSmallQuotaLabel(_ text: String, in rect: NSRect, color: NSColor) {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .left
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 9.2, weight: .semibold),
+            .foregroundColor: color,
+            .paragraphStyle: paragraphStyle
+        ]
+        text.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes)
+    }
+
+    private func drawHorizontalCountdown(_ text: String, in rect: NSRect, color: NSColor) {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .left
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 8.0, weight: .medium),
+            .foregroundColor: color,
+            .paragraphStyle: paragraphStyle
+        ]
+        text.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes)
+    }
+
+    private func drawQuotaRings(snapshot: UsageSnapshot, in rect: NSRect) {
+        let trackColor = NSColor.labelColor.withAlphaComponent(0.18)
+        let primaryColor = primaryQuotaColor(available: snapshot.primary != nil)
+        let secondaryColor = secondaryQuotaColor(available: snapshot.secondary != nil)
+        drawQuotaRing(
+            center: NSPoint(x: 10.5, y: rect.midY),
+            radius: 8.2,
+            percent: quotaPercentValue(snapshot.primary),
+            trackColor: trackColor,
+            fillColor: primaryColor
+        )
+        drawCenteredQuotaNumber(quotaNumberText(snapshot.primary), in: NSRect(x: 1.7, y: 5.2, width: 17.6, height: 10), color: primaryColor)
+        drawQuotaRing(
+            center: NSPoint(x: 42.5, y: rect.midY),
+            radius: 8.2,
+            percent: quotaPercentValue(snapshot.secondary),
+            trackColor: trackColor,
+            fillColor: secondaryColor
+        )
+        drawCenteredQuotaNumber(quotaNumberText(snapshot.secondary), in: NSRect(x: 33.7, y: 5.2, width: 17.6, height: 10), color: secondaryColor)
+    }
+
+    private func drawQuotaRing(center: NSPoint, radius: CGFloat, percent: Double?, trackColor: NSColor, fillColor: NSColor) {
+        let lineWidth: CGFloat = 1.7
+        let trackPath = NSBezierPath()
+        trackPath.appendArc(withCenter: center, radius: radius, startAngle: 0, endAngle: 360)
+        trackPath.lineWidth = lineWidth
+        trackColor.setStroke()
+        trackPath.stroke()
+
+        guard let percent else { return }
+        let progress = max(0, min(1, percent / 100))
+        guard progress > 0 else { return }
+        let progressPath = NSBezierPath()
+        progressPath.appendArc(
+            withCenter: center,
+            radius: radius,
+            startAngle: 90,
+            endAngle: 90 - CGFloat(progress) * 360,
+            clockwise: true
+        )
+        progressPath.lineCapStyle = .round
+        progressPath.lineWidth = lineWidth
+        fillColor.setStroke()
+        progressPath.stroke()
+    }
+
+    private func drawTextQuota(snapshot: UsageSnapshot, in rect: NSRect) {
+        let primaryColor = primaryQuotaColor(available: snapshot.primary != nil)
+        let secondaryColor = secondaryQuotaColor(available: snapshot.secondary != nil)
+        let countdownColor = NSColor.labelColor.withAlphaComponent(0.58)
+        drawQuotaTextLine("5h \(quotaPercentText(snapshot.primary))", in: NSRect(x: 0, y: 10.0, width: 48, height: 10), color: primaryColor, alignment: .left)
+        drawQuotaTextLine(compactResetCountdown(snapshot.primary), in: NSRect(x: 50, y: 10.0, width: 46, height: 10), color: countdownColor, alignment: .left)
+        drawQuotaTextLine("7d \(quotaPercentText(snapshot.secondary))", in: NSRect(x: 0, y: -0.8, width: 48, height: 10), color: secondaryColor, alignment: .left)
+        drawQuotaTextLine(compactResetCountdown(snapshot.secondary), in: NSRect(x: 50, y: -0.8, width: 46, height: 10), color: countdownColor, alignment: .left)
+    }
+
+    private func compactResetCountdown(_ window: RateWindow?) -> String {
+        guard let resetsAt = window?.resetsAt else { return "--" }
+        let remaining = max(0, Int(resetsAt.timeIntervalSince(Date()).rounded(.down)))
+        let days = remaining / 86400
+        let hours = (remaining % 86400) / 3600
+        let minutes = (remaining % 3600) / 60
+
+        if days > 0 {
+            return "\(days)d\(hours)h"
+        }
+        if hours > 0 {
+            return "\(hours)h\(minutes)m"
+        }
+        return "\(minutes)m"
+    }
+
+    private func drawQuotaTextLine(_ text: String, in rect: NSRect, color: NSColor, alignment: NSTextAlignment = .left) {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = alignment
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 9.4, weight: .semibold),
+            .foregroundColor: color,
+            .paragraphStyle: paragraphStyle
+        ]
+        text.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes)
+    }
+
+    private func drawQuotaNumber(_ text: String, in rect: NSRect, color: NSColor) {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .left
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: color,
+            .paragraphStyle: paragraphStyle
+        ]
+        text.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes)
+    }
+
+    private func drawQuotaPercentNumber(_ text: String, in rect: NSRect, color: NSColor) {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .left
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 9.4, weight: .semibold),
+            .foregroundColor: color,
+            .paragraphStyle: paragraphStyle
+        ]
+        text.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes)
+    }
+
+    private func drawCenteredQuotaNumber(_ text: String, in rect: NSRect, color: NSColor) {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .center
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: text.count >= 3 ? 7.0 : 7.9, weight: .bold),
+            .foregroundColor: color,
+            .paragraphStyle: paragraphStyle
+        ]
+        text.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes)
     }
 
     private func registerGlobalHotKey() {
