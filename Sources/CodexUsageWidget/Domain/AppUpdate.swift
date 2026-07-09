@@ -338,6 +338,17 @@ enum AppUpdateSelfTest {
             expect(result.status == .updateAvailable, "fixture should produce updateAvailable")
             expect(result.latestVersionLabel == "1.0.0-beta03", "latest version label should normalize beta03")
             expect(result.preferredAsset?.architecture == .arm64, "preferred asset should match architecture")
+
+            let revalidated = GitHubReleaseUpdateChecker.revalidateCachedResult(
+                result,
+                currentVersion: "1.0.0-beta03",
+                includePrereleases: true,
+                checkedAt: Date(timeIntervalSince1970: 1),
+                architecture: .arm64
+            )
+            expect(revalidated.status == .upToDate, "cached beta03 release should be up to date after installing beta03")
+            expect(revalidated.currentVersion == "1.0.0-beta03", "revalidated cache should use the running app version")
+            expect(revalidated.preferredAsset == nil, "up-to-date cache result should not keep a download asset")
         } catch {
             failures.append("fixture decode failed: \(error.localizedDescription)")
         }

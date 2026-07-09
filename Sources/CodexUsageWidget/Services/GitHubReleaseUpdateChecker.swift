@@ -35,7 +35,17 @@ final class GitHubReleaseUpdateChecker {
         if !force,
            let cached,
            checkedAt.timeIntervalSince(cached.checkedAt) < minimumAutomaticCheckInterval {
-            completion(cached.result)
+            let result = Self.revalidateCachedResult(
+                cached.result,
+                currentVersion: currentVersion,
+                includePrereleases: includePrereleases,
+                checkedAt: cached.result.checkedAt,
+                architecture: .current
+            )
+            if result != cached.result {
+                writeCache(result: result, etag: cached.etag, checkedAt: cached.checkedAt)
+            }
+            completion(result)
             return
         }
 
@@ -71,7 +81,13 @@ final class GitHubReleaseUpdateChecker {
             }
 
             if httpResponse.statusCode == 304, let cached {
-                let refreshed = cached.result.refreshed(at: checkedAt)
+                let refreshed = Self.revalidateCachedResult(
+                    cached.result,
+                    currentVersion: currentVersion,
+                    includePrereleases: includePrereleases,
+                    checkedAt: checkedAt,
+                    architecture: .current
+                )
                 self.writeCache(result: refreshed, etag: cached.etag, checkedAt: checkedAt)
                 completion(refreshed)
                 return
@@ -166,6 +182,33 @@ final class GitHubReleaseUpdateChecker {
             latestRelease: latest.release,
             preferredAsset: latest.release.preferredAsset(for: architecture),
             errorMessage: nil
+        )
+    }
+
+    static func revalidateCachedResult(
+        _ cachedResult: AppUpdateResult,
+        currentVersion: String,
+        includePrereleases: Bool,
+        checkedAt: Date,
+        architecture: AppArchitecture
+    ) -> AppUpdateResult {
+        guard let latestRelease = cachedResult.latestRelease else {
+            return AppUpdateResult(
+                status: cachedResult.status,
+                checkedAt: checkedAt,
+                currentVersion: currentVersion,
+                latestRelease: nil,
+                preferredAsset: nil,
+                errorMessage: cachedResult.errorMessage
+            )
+        }
+
+        return evaluate(
+            releases: [latestRelease],
+            currentVersion: currentVersion,
+            includePrereleases: includePrereleases,
+            checkedAt: checkedAt,
+            architecture: architecture
         )
     }
 
