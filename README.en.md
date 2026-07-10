@@ -170,3 +170,9 @@ MIT. See [LICENSE](LICENSE).
 Scan the QR code to follow my WeChat official account for AI tools, Codex usage notes, and independent product building.
 
 <img src="docs/wechat-official-account-qr.png" alt="WeChat official account QR code" width="220" />
+
+## User Community
+
+Scan to join the Chinese-language codexU user community for usage tips, issue feedback, and open-source collaboration.
+
+<img src="docs/codexu-community-qr.jpg" alt="codexU user community WeChat QR code" width="320" />
