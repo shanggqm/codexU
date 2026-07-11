@@ -1,5 +1,6 @@
 import Carbon.HIToolbox
 import Cocoa
+import CoreFoundation
 
 struct GlobalShortcut: Hashable {
     static let `default` = GlobalShortcut(
@@ -44,21 +45,32 @@ struct GlobalShortcut: Hashable {
     }
 
     static func load(defaults: UserDefaults = .standard) -> GlobalShortcut? {
-        if defaults.object(forKey: enabledStorageKey) != nil,
-           !defaults.bool(forKey: enabledStorageKey) {
-            return nil
+        if let enabledValue = defaults.object(forKey: enabledStorageKey) {
+            guard let enabledNumber = enabledValue as? NSNumber,
+                  CFGetTypeID(enabledNumber) == CFBooleanGetTypeID()
+            else { return repairToDefault(defaults: defaults) }
+            if !enabledNumber.boolValue { return nil }
         }
-        guard defaults.object(forKey: keyCodeStorageKey) != nil,
-              defaults.object(forKey: modifiersStorageKey) != nil,
+        guard let keyCode = storedUInt32(forKey: keyCodeStorageKey, defaults: defaults),
+              let modifiers = storedUInt32(forKey: modifiersStorageKey, defaults: defaults),
               let keyLabel = defaults.string(forKey: keyLabelStorageKey),
-              !keyLabel.isEmpty
-        else { return .default }
+              isValidStoredLabel(keyLabel)
+        else { return repairToDefault(defaults: defaults) }
 
-        return GlobalShortcut(
-            keyCode: UInt32(defaults.integer(forKey: keyCodeStorageKey)),
-            carbonModifiers: UInt32(defaults.integer(forKey: modifiersStorageKey)),
+        let allowedModifiers = UInt32(cmdKey | controlKey | optionKey | shiftKey)
+        guard modifiers != 0, modifiers & ~allowedModifiers == 0 else {
+            return repairToDefault(defaults: defaults)
+        }
+
+        let shortcut = GlobalShortcut(
+            keyCode: keyCode,
+            carbonModifiers: modifiers,
             keyLabel: keyLabel
         )
+        guard shortcut.validationError == nil else {
+            return repairToDefault(defaults: defaults)
+        }
+        return shortcut
     }
 
     func save(defaults: UserDefaults = .standard) {
@@ -73,6 +85,35 @@ struct GlobalShortcut: Hashable {
         defaults.removeObject(forKey: keyCodeStorageKey)
         defaults.removeObject(forKey: modifiersStorageKey)
         defaults.removeObject(forKey: keyLabelStorageKey)
+    }
+
+    private static func storedUInt32(
+        forKey key: String,
+        defaults: UserDefaults
+    ) -> UInt32? {
+        guard let number = defaults.object(forKey: key) as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID()
+        else { return nil }
+        let value = number.doubleValue
+        guard value.isFinite,
+              value.rounded(.towardZero) == value,
+              value >= 0,
+              value <= Double(UInt32.max)
+        else { return nil }
+        return UInt32(value)
+    }
+
+    private static func isValidStoredLabel(_ label: String) -> Bool {
+        !label.isEmpty
+            && label.count <= 12
+            && label.unicodeScalars.allSatisfy {
+                !CharacterSet.controlCharacters.contains($0)
+            }
+    }
+
+    private static func repairToDefault(defaults: UserDefaults) -> GlobalShortcut {
+        GlobalShortcut.default.save(defaults: defaults)
+        return .default
     }
 
     static func from(event: NSEvent) -> GlobalShortcut? {

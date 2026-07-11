@@ -19,6 +19,9 @@ enum GlobalShortcutSelfTest {
         _ = NSApplication.shared
         var failures: [String] = []
         checkValidationRules(failures: &failures)
+        checkPersistence(failures: &failures)
+        checkSettingsMutations(failures: &failures)
+        checkInvalidStoredValues(failures: &failures)
         checkReplacementTransaction(failures: &failures)
         checkExclusiveConflictPreservesOldRegistration(failures: &failures)
 
@@ -73,6 +76,97 @@ enum GlobalShortcutSelfTest {
 
         for (name, shortcut, expected) in cases where shortcut.validationError != expected {
             failures.append("\(name) expected \(String(describing: expected)), got \(String(describing: shortcut.validationError))")
+        }
+    }
+
+    private static func checkPersistence(failures: inout [String]) {
+        withDefaults { defaults in
+            let shortcut = self.shortcut(kVK_ANSI_K, cmdKey | shiftKey, "K")
+            shortcut.save(defaults: defaults)
+            if GlobalShortcut.load(defaults: defaults) != shortcut {
+                failures.append("saved shortcut did not round-trip")
+            }
+
+            GlobalShortcut.clear(defaults: defaults)
+            if GlobalShortcut.load(defaults: defaults) != nil {
+                failures.append("cleared shortcut did not remain disabled")
+            }
+        }
+    }
+
+    private static func checkSettingsMutations(failures: inout [String]) {
+        withDefaults { defaults in
+            let custom = self.shortcut(kVK_ANSI_K, cmdKey | shiftKey, "K")
+            custom.save(defaults: defaults)
+            let settings = AppSettings(defaults: defaults)
+            settings.globalShortcutRegistration = { _ in .success(()) }
+            settings.resetGlobalShortcut()
+            if settings.globalShortcut != .default
+                || GlobalShortcut.load(defaults: defaults) != .default {
+                failures.append("reset did not restore and persist the default shortcut")
+            }
+
+            settings.clearGlobalShortcut()
+            if settings.globalShortcut != nil
+                || GlobalShortcut.load(defaults: defaults) != nil {
+                failures.append("settings clear did not persist the disabled state")
+            }
+        }
+
+        withDefaults { defaults in
+            let oldShortcut = self.shortcut(kVK_ANSI_K, cmdKey | shiftKey, "K")
+            let candidate = self.shortcut(kVK_ANSI_L, cmdKey | shiftKey, "L")
+            oldShortcut.save(defaults: defaults)
+            let settings = AppSettings(defaults: defaults)
+            settings.globalShortcutRegistration = { _ in .failure(.occupied) }
+            settings.requestGlobalShortcut(candidate)
+            if settings.globalShortcut != oldShortcut
+                || GlobalShortcut.load(defaults: defaults) != oldShortcut
+                || settings.globalShortcutError != .occupied {
+                failures.append("registration failure did not retain the old stored shortcut")
+            }
+        }
+    }
+
+    private static func checkInvalidStoredValues(failures: inout [String]) {
+        let invalidCases: [(String, (UserDefaults) -> Void)] = [
+            ("negative key code", { defaults in
+                seed(defaults, keyCode: -1, modifiers: cmdKey | shiftKey, label: "K")
+            }),
+            ("overflow key code", { defaults in
+                defaults.set(true, forKey: GlobalShortcut.enabledStorageKey)
+                defaults.set(Double(UInt32.max) + 1, forKey: GlobalShortcut.keyCodeStorageKey)
+                defaults.set(cmdKey | shiftKey, forKey: GlobalShortcut.modifiersStorageKey)
+                defaults.set("K", forKey: GlobalShortcut.keyLabelStorageKey)
+            }),
+            ("unknown modifier bit", { defaults in
+                seed(
+                    defaults,
+                    keyCode: kVK_ANSI_K,
+                    modifiers: Int(UInt32(cmdKey | shiftKey) | (1 << 31)),
+                    label: "K"
+                )
+            }),
+            ("unsupported key", { defaults in
+                seed(defaults, keyCode: kVK_Return, modifiers: cmdKey | shiftKey, label: "↩")
+            }),
+            ("control character label", { defaults in
+                seed(defaults, keyCode: kVK_ANSI_K, modifiers: cmdKey | shiftKey, label: "K\n")
+            }),
+            ("non-boolean enabled flag", { defaults in
+                defaults.set("yes", forKey: GlobalShortcut.enabledStorageKey)
+            })
+        ]
+
+        for (name, mutation) in invalidCases {
+            withDefaults { defaults in
+                mutation(defaults)
+                if GlobalShortcut.load(defaults: defaults) != .default
+                    || defaults.integer(forKey: GlobalShortcut.keyCodeStorageKey) != Int(kVK_ANSI_U)
+                    || defaults.integer(forKey: GlobalShortcut.modifiersStorageKey) != cmdKey {
+                    failures.append("\(name) did not repair to the default shortcut")
+                }
+            }
         }
     }
 
@@ -176,6 +270,25 @@ enum GlobalShortcutSelfTest {
             carbonModifiers: UInt32(modifiers),
             keyLabel: label
         )
+    }
+
+    private static func seed(
+        _ defaults: UserDefaults,
+        keyCode: Int,
+        modifiers: Int,
+        label: String
+    ) {
+        defaults.set(true, forKey: GlobalShortcut.enabledStorageKey)
+        defaults.set(keyCode, forKey: GlobalShortcut.keyCodeStorageKey)
+        defaults.set(modifiers, forKey: GlobalShortcut.modifiersStorageKey)
+        defaults.set(label, forKey: GlobalShortcut.keyLabelStorageKey)
+    }
+
+    private static func withDefaults(_ body: (UserDefaults) -> Void) {
+        let suiteName = "codexU.global-shortcut-self-test.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else { return }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        body(defaults)
     }
 
     private static func registerExclusive(
