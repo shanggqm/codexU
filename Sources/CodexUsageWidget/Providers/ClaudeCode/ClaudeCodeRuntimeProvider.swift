@@ -105,7 +105,7 @@ private final class ClaudeCodeTranscriptReader {
             writeCache(cache, context: context)
         }
 
-        return makeLocalUsage(from: summaries, now: context.now, messages: &messages)
+        return makeLocalUsage(from: summaries, statistics: context.statistics, messages: &messages)
     }
 
     private func enumerateJSONLFiles(under root: URL) -> [URL] {
@@ -242,9 +242,10 @@ private final class ClaudeCodeTranscriptReader {
 
     private func makeLocalUsage(
         from summaries: [ClaudeTranscriptSummary],
-        now: Date,
+        statistics: StatisticsContext,
         messages: inout [String]
     ) -> LocalUsage? {
+        let now = statistics.now
         var uniqueDeltas: [ClaudeUsageDelta] = []
         var seenMessageIds = Set<String>()
         for delta in summaries.flatMap(\.deltas) {
@@ -264,7 +265,7 @@ private final class ClaudeCodeTranscriptReader {
 
         uniqueDeltas.sort { $0.date < $1.date }
 
-        let calendar = Calendar.current
+        let calendar = statistics.calendar
         let dayStart = calendar.startOfDay(for: now)
         let sevenDayStart = calendar.date(byAdding: .day, value: -6, to: dayStart) ?? dayStart
         let previousSevenDayStart = calendar.date(byAdding: .day, value: -13, to: dayStart) ?? dayStart
@@ -295,7 +296,7 @@ private final class ClaudeCodeTranscriptReader {
             }
 
             let bucketDate = calendar.startOfDay(for: delta.date)
-            let key = claudeDayKey(bucketDate, calendar: calendar)
+            let key = statistics.dayKey(for: bucketDate)
             var dayUsage = dailyUsage[key]?.usage ?? .zero
             dayUsage.add(tokens: delta.tokens, costUSD: cost)
             dailyUsage[key] = (bucketDate, dayUsage)
@@ -362,6 +363,8 @@ private final class ClaudeCodeTranscriptReader {
         calendar: Calendar
     ) -> [DailyTokenBucket] {
         let labelFormatter = DateFormatter()
+        labelFormatter.calendar = calendar
+        labelFormatter.timeZone = calendar.timeZone
         labelFormatter.locale = Locale(identifier: "zh_CN")
         labelFormatter.dateFormat = "E"
         let start = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: now)) ?? now
@@ -972,6 +975,7 @@ private func claudeEstimatedCostUSD(tokens: TokenBreakdown, model: String?) -> D
 private func claudeDayKey(_ date: Date, calendar: Calendar = .current) -> String {
     let formatter = DateFormatter()
     formatter.calendar = calendar
+    formatter.timeZone = calendar.timeZone
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.dateFormat = "yyyy-MM-dd"
     return formatter.string(from: date)

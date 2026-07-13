@@ -12,8 +12,11 @@ final class MultiRuntimeUsageReader {
         self.aggregator = aggregator
     }
 
-    func load() -> MultiRuntimeUsageSnapshot {
-        let context = RuntimeLoadContext.live()
+    func load(
+        statisticsPreference: StatisticsTimeZonePreference = .default,
+        generation: UInt64 = 0
+    ) -> MultiRuntimeUsageSnapshot {
+        let context = RuntimeLoadContext.live(statisticsPreference: statisticsPreference)
         let runtimeSnapshots = registry.providers.map { provider in
             provider.loadSnapshot(context: context)
         }
@@ -22,12 +25,21 @@ final class MultiRuntimeUsageReader {
         return MultiRuntimeUsageSnapshot(
             refreshedAt: refreshedAt,
             runtimes: runtimeSnapshots,
-            aggregate: aggregate
+            aggregate: aggregate,
+            statisticsIdentity: StatisticsIdentity(
+                preference: context.statistics.preference,
+                resolvedIdentifier: context.statistics.resolvedIdentifier,
+                generation: generation,
+                now: context.now
+            )
         )
     }
 
-    func loadTaskBoard(scope: RuntimeScope) -> TaskBoard? {
-        let context = RuntimeLoadContext.live()
+    func loadTaskBoard(
+        scope: RuntimeScope,
+        statisticsPreference: StatisticsTimeZonePreference = .default
+    ) -> TaskBoard? {
+        let context = RuntimeLoadContext.live(statisticsPreference: statisticsPreference)
         return registry.provider(for: scope)?.loadTaskBoard(context: context)
     }
 }

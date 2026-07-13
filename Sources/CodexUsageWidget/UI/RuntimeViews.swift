@@ -112,6 +112,7 @@ struct RuntimeStatusMenuView: View {
                     .frame(width: 26, height: 24)
             }
             .buttonStyle(.plain)
+            .disabled(store.isRefreshing)
             .help(language.text("刷新", "Refresh"))
         }
     }
@@ -125,7 +126,7 @@ struct RuntimeStatusMenuView: View {
             Text(language.text("今日总 token", "Total tokens today"))
                 .font(.system(size: 11, weight: .semibold))
             Spacer()
-            Text(runtimeFormatTokens(store.totalTodayTokens(for: displayedScopes)))
+            Text(TokenFormatter.format(store.totalTodayTokens(for: displayedScopes)))
                 .font(.system(size: 13, weight: .bold, design: .rounded))
                 .monospacedDigit()
         }
@@ -236,7 +237,7 @@ struct RuntimeSummaryCard: View {
                         Text(language.text("今日 token", "Today"))
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
-                        Text(runtimeFormatTokens(summary.todayTokens))
+                        Text(TokenFormatter.format(summary.todayTokens))
                             .font(.system(size: 15, weight: .bold, design: .rounded))
                             .monospacedDigit()
                     }
@@ -383,18 +384,6 @@ private enum RuntimeLogo {
         }
         return NSImage(contentsOf: url)
     }
-}
-
-private func runtimeFormatTokens(_ value: Int64?) -> String {
-    guard let value else { return "--" }
-    let absValue = abs(Double(value))
-    if absValue >= 1_000_000 {
-        return String(format: "%.1fM", Double(value) / 1_000_000)
-    }
-    if absValue >= 1_000 {
-        return String(format: "%.1fK", Double(value) / 1_000)
-    }
-    return "\(value)"
 }
 
 private func runtimeFormatPercent(_ value: Double?) -> String {

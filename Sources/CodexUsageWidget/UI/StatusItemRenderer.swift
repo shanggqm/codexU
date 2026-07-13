@@ -379,6 +379,11 @@ struct StatusItemRenderer {
         )
     }
 
+    // Loaded template PNGs are immutable once decoded; cache them so each icon
+    // repaint reuses the decoded bitmap instead of re-reading and re-decoding
+    // the file from disk. Accessed on the main thread only (via updateStatusItem).
+    private static var templateCache: [String: NSImage] = [:]
+
     private func runtimeTemplate(for scope: RuntimeScope) -> NSImage? {
         let resourceName: String
         switch scope {
@@ -387,8 +392,12 @@ struct StatusItemRenderer {
         case .claudeCode:
             resourceName = "claudecode-template"
         }
+        if let cached = Self.templateCache[resourceName] {
+            return cached
+        }
         if let url = Bundle.main.url(forResource: resourceName, withExtension: "png"),
            let image = NSImage(contentsOf: url) {
+            Self.templateCache[resourceName] = image
             return image
         }
 

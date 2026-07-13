@@ -10,6 +10,15 @@ enum StatusItemPresentationSelfTest {
             }
         }
 
+        expect(TokenFormatter.format(nil) == "--", "missing tokens should remain unavailable")
+        expect(TokenFormatter.format(999) == "999", "sub-thousand tokens should remain unabridged")
+        expect(TokenFormatter.format(1_000) == "1.0K", "thousands should use K")
+        expect(TokenFormatter.format(999_949) == "999.9K", "values below the rounded boundary should stay in K")
+        expect(TokenFormatter.format(999_950) == "1.0M", "rounded K boundary should promote to M")
+        expect(TokenFormatter.format(999_999_999) == "1.0B", "rounded M boundary should promote to B")
+        expect(TokenFormatter.format(1_234_567_890) == "1.2B", "billions should use B")
+        expect(TokenFormatter.format(-1_234_567) == "-1.2M", "negative values should preserve their sign")
+
         let suiteName = "codexU.status-item-self-test.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             print("status item self-test failed: could not create UserDefaults suite")

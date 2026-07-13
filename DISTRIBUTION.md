@@ -65,6 +65,24 @@ make release
 
 This creates the DMG and a `SHA-256` checksum file next to it.
 
+## Deterministic release verification
+
+For a formal release, prefer the repository wrappers instead of manually repeating build and verification commands:
+
+```sh
+make release-package
+```
+
+This runs the self-tests, builds both architectures, verifies both DMGs and checksums, mounts each image, checks the embedded Mach-O architecture, and verifies the app signature.
+
+After copying the generated SHA-256 values into `docs/release-notes-v<version>.md`, run:
+
+```sh
+make release-check
+```
+
+This validates version/document consistency, release assets, checksums, release notes, and tag/release conflicts. It intentionally does not tag, push, or publish; those external writes remain explicit steps documented in `AGENTS.md` and `.codex/skills/codexu-release/SKILL.md`.
+
 ## Developer ID signed build
 
 For broad distribution outside the App Store, sign with a Developer ID Application certificate:

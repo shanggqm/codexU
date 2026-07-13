@@ -4,8 +4,12 @@ struct RuntimeLoadContext {
     let now: Date
     let homeDirectory: URL
     let cacheDirectory: URL
+    let statistics: StatisticsContext
 
-    static func live(now: Date = Date()) -> RuntimeLoadContext {
+    static func live(
+        now: Date = Date(),
+        statisticsPreference: StatisticsTimeZonePreference = .default
+    ) -> RuntimeLoadContext {
         let environment = ProcessInfo.processInfo.environment
         let home = environment["CODEXU_HOME_OVERRIDE"].map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.homeDirectoryForCurrentUser
@@ -13,7 +17,12 @@ struct RuntimeLoadContext {
             ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
             .appendingPathComponent("codexU", isDirectory: true)
             ?? home.appendingPathComponent("Library/Caches/codexU", isDirectory: true)
-        return RuntimeLoadContext(now: now, homeDirectory: home, cacheDirectory: cache)
+        return RuntimeLoadContext(
+            now: now,
+            homeDirectory: home,
+            cacheDirectory: cache,
+            statistics: StatisticsContext(preference: statisticsPreference, now: now)
+        )
     }
 }
 
@@ -53,7 +62,7 @@ struct CodexRuntimeProvider: RuntimeUsageProvider {
     let scope: RuntimeScope = .codex
 
     func loadSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot {
-        let snapshot = CodexUsageReader().load()
+        let snapshot = CodexUsageReader().load(context: context)
         let status: RuntimeMenuStatus
         if snapshot.primary != nil || snapshot.secondary != nil {
             status = .available
@@ -73,6 +82,6 @@ struct CodexRuntimeProvider: RuntimeUsageProvider {
     }
 
     func loadTaskBoard(context: RuntimeLoadContext) -> TaskBoard? {
-        CodexUsageReader().loadTaskBoard()
+        CodexUsageReader().loadTaskBoard(context: context)
     }
 }

@@ -221,7 +221,7 @@ struct StatusItemPresentationBuilder {
                 now: now
             )
         case .todayTokens:
-            let value = formatTokens(source.todayTokens)
+            let value = TokenFormatter.format(source.todayTokens)
             return StatusItemMetricPresentation(
                 metric: metric,
                 label: language.text("今日", "Today"),
@@ -304,15 +304,4 @@ struct StatusItemPresentationBuilder {
         return "\(minutes)m"
     }
 
-    private func formatTokens(_ value: Int64?) -> String {
-        guard let value else { return "--" }
-        let absValue = abs(Double(value))
-        if absValue >= 1_000_000 {
-            return String(format: "%.1fM", Double(value) / 1_000_000)
-        }
-        if absValue >= 1_000 {
-            return String(format: "%.1fK", Double(value) / 1_000)
-        }
-        return "\(value)"
-    }
 }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "codexU Release"
+  short_description: "codexU release packaging and GitHub SOP"
+  default_prompt: "Use $codexu-release to prepare and publish the next codexU patch release."

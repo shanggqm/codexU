@@ -93,7 +93,24 @@ open "build/codexU.app"
 
 准备发布时才更新版本号和发布说明。
 
-发布相关改动必须检查：
+发布必须遵循以下固定顺序，不得跳过：
+
+1. **确认范围与远端**：检查工作树、当前分支、GitHub 登录、远端最新 tag/release；混合改动必须先确认归属。
+2. **更新版本与文档**：更新 `Resources/Info.plist` 的短版本和递增 build number、`CHANGELOG.md`、`README.md`、`README.en.md`、`docs/release-notes-v<version>.md`。
+3. **构建验证**：运行 `make release-package`。该命令统一执行自测、双架构 DMG 构建、checksum、DMG 挂载、Mach-O 架构和 codesign 验证。
+4. **回填 checksum**：把 `dist/*.sha256` 的真实值写入 release notes，再运行 `make release-check`。
+5. **提交与发布**：release commit 使用 `chore(release): prepare v<version>`；创建 annotated tag `v<version>`；fetch 并检查 `origin/main...HEAD` 后，显式 push `main` 和 tag，再用 release notes 与四个精确资产创建 GitHub Release。
+6. **线上复核**：确认 Release 非 draft、stable/beta 属性正确、Latest 状态符合预期、四个资产上传成功、tag 指向 release commit，最后确认工作树清洁。
+
+稳定约束：
+
+- 不提交 `build/`、`dist/` 产物；DMG 只上传 GitHub Release。
+- 不 force-push `main`，不覆盖远端 tag/release；冲突时停止并检查。
+- 未实际执行 notarization 时，release notes 必须明确“未 notarize”，不得声称已公证。
+- beta 使用 `--prerelease`；稳定 patch 不使用。
+- 发布脚本只自动化确定性检查与打包，不自动 push/tag/create release，避免误发布。
+
+发布相关文件至少包括：
 
 - `Resources/Info.plist`
 - `CHANGELOG.md`
@@ -101,6 +118,8 @@ open "build/codexU.app"
 - `Makefile`
 
 默认本地迭代不做版本 bump。
+
+完整命令与故障恢复见 `.codex/skills/codexu-release/SKILL.md` 和 `DISTRIBUTION.md`。
 
 ## 最终回复
 
