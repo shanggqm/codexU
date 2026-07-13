@@ -15,6 +15,7 @@ fi
 plutil -lint Resources/Info.plist
 git diff --check
 
+make test-macos-compatibility
 make build >/dev/null
 build/codexU.app/Contents/MacOS/codexU --self-test-statistics-time-zone
 build/codexU.app/Contents/MacOS/codexU --self-test-status-item
