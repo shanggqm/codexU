@@ -2909,6 +2909,7 @@ struct UsageWidgetView: View {
 
     @ViewBuilder
     private var windowSurface: some View {
+#if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             RoundedRectangle(cornerRadius: Self.windowCornerRadius, style: .continuous)
                 .fill(Color.clear)
@@ -2924,6 +2925,14 @@ struct UsageWidgetView: View {
                         .strokeBorder(WidgetPalette.sectionStroke(effectiveColorScheme), lineWidth: 0.8)
                 )
         }
+#else
+        RoundedRectangle(cornerRadius: Self.windowCornerRadius, style: .continuous)
+            .fill(WidgetPalette.sectionFill(effectiveColorScheme))
+            .overlay(
+                RoundedRectangle(cornerRadius: Self.windowCornerRadius, style: .continuous)
+                    .strokeBorder(WidgetPalette.sectionStroke(effectiveColorScheme), lineWidth: 0.8)
+            )
+#endif
     }
 
     private var widgetContent: some View {
@@ -4066,6 +4075,7 @@ struct SectionBackgroundModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
+#if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             content
                 .glassEffect(
@@ -4083,6 +4093,17 @@ struct SectionBackgroundModifier: ViewModifier {
                         )
                 )
         }
+#else
+        content
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(WidgetPalette.sectionFill(colorScheme))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(WidgetPalette.sectionStroke(colorScheme), lineWidth: 0.8)
+                    )
+            )
+#endif
     }
 }
 
@@ -4597,11 +4618,11 @@ private struct DualQuotaRingParticles: NSViewRepresentable {
         private func equalProgress(_ lhs: CGFloat?, _ rhs: CGFloat?) -> Bool {
             switch (lhs, rhs) {
             case (.none, .none):
-                true
+                return true
             case let (.some(lhs), .some(rhs)):
-                abs(lhs - rhs) < 0.0001
+                return abs(lhs - rhs) < 0.0001
             default:
-                false
+                return false
             }
         }
     }
@@ -7347,6 +7368,7 @@ final class GlassHostingContainer<Content: View>: NSView {
         host.frame = bounds
         host.autoresizingMask = [.width, .height]
 
+#if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: bounds)
             glass.autoresizingMask = [.width, .height]
@@ -7367,6 +7389,18 @@ final class GlassHostingContainer<Content: View>: NSView {
             material.addSubview(host)
             addSubview(material)
         }
+#else
+        let material = NSVisualEffectView(frame: bounds)
+        material.autoresizingMask = [.width, .height]
+        material.material = .hudWindow
+        material.blendingMode = .behindWindow
+        material.state = .active
+        material.wantsLayer = true
+        material.layer?.cornerRadius = cornerRadius
+        material.layer?.masksToBounds = true
+        material.addSubview(host)
+        addSubview(material)
+#endif
     }
 
     required init?(coder: NSCoder) {
