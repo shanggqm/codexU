@@ -1,7 +1,7 @@
 # codexU
 
 > [!IMPORTANT]
-> **建议升级到 v1.0.1 或更高版本。** Codex 与 ChatGPT 合并升级后，macOS 应用由 `Codex.app` 更名为 `ChatGPT.app`。旧版 codexU 仍按旧路径查找 Codex，可能导致额度和用量读取失败；v1.0.1 已兼容新应用名称，并保留旧版路径与标准 CLI 回退。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
+> **建议升级到 v1.0.4 或更高版本。** v1.0.4 修复菜单栏状态项可能触发的高 CPU 重绘回环，并降低后台任务轮询与长期 session 缓存的能耗和内存成本；同时继续兼容 ChatGPT.app、旧版 Codex.app 与标准 CLI 路径。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
 
 [English](README.en.md)
 
@@ -155,10 +155,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-1.0.3-mac-arm64.dmg
-dist/codexU-1.0.3-mac-arm64.dmg.sha256
-dist/codexU-1.0.3-mac-x86_64.dmg
-dist/codexU-1.0.3-mac-x86_64.dmg.sha256
+dist/codexU-1.0.4-mac-arm64.dmg
+dist/codexU-1.0.4-mac-arm64.dmg.sha256
+dist/codexU-1.0.4-mac-x86_64.dmg
+dist/codexU-1.0.4-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。

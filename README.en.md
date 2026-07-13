@@ -1,7 +1,7 @@
 # codexU
 
 > [!IMPORTANT]
-> **Upgrade to v1.0.1 or later.** After Codex was integrated into the ChatGPT desktop app, the macOS app was renamed from `Codex.app` to `ChatGPT.app`. Older codexU versions still look for the previous path, which can prevent quota and usage data from loading. v1.0.1 supports the new app name while retaining legacy-path and standard CLI fallbacks. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
+> **Upgrade to v1.0.4 or later.** v1.0.4 fixes a menu bar repaint feedback loop that could consume a CPU core while idle, reduces background task polling, and bounds the long-lived session cache. It retains support for ChatGPT.app, legacy Codex.app paths, and the standard CLI. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
 
 codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT Codex and Claude Code quota, token usage, and today's task status. It keeps the information you check most in the menu bar and main window, so you can quickly see remaining quota, reset times, and daily work progress.
 
@@ -128,10 +128,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-1.0.3-mac-arm64.dmg
-dist/codexU-1.0.3-mac-arm64.dmg.sha256
-dist/codexU-1.0.3-mac-x86_64.dmg
-dist/codexU-1.0.3-mac-x86_64.dmg.sha256
+dist/codexU-1.0.4-mac-arm64.dmg
+dist/codexU-1.0.4-mac-arm64.dmg.sha256
+dist/codexU-1.0.4-mac-x86_64.dmg
+dist/codexU-1.0.4-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).
