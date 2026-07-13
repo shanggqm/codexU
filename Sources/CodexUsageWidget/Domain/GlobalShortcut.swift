@@ -27,6 +27,10 @@ struct GlobalShortcut: Hashable {
         return result + keyLabel
     }
 
+    func matchesRegistration(of other: GlobalShortcut) -> Bool {
+        keyCode == other.keyCode && carbonModifiers == other.carbonModifiers
+    }
+
     var validationError: GlobalShortcutValidationError? {
         if self == .default { return nil }
 
@@ -37,9 +41,10 @@ struct GlobalShortcut: Hashable {
         guard carbonModifiers & UInt32(cmdKey | controlKey) != 0 else {
             return .requiresCommandOrControl
         }
-        guard !Self.reservedSystemShortcuts.contains(where: {
-            $0.keyCode == keyCode && $0.carbonModifiers == carbonModifiers
-        }) else { return .reservedSystemShortcut }
+        guard !Self.isReservedSystemShortcut(
+            keyCode: keyCode,
+            modifiers: carbonModifiers
+        ) else { return .reservedSystemShortcut }
         guard Self.supportedKeyCodes.contains(keyCode) else { return .unsupportedKey }
         return nil
     }
@@ -145,12 +150,39 @@ struct GlobalShortcut: Hashable {
         kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12
     ].map(UInt32.init))
 
-    private static let reservedSystemShortcuts: [GlobalShortcut] = [
-        GlobalShortcut(keyCode: UInt32(kVK_Escape), carbonModifiers: UInt32(cmdKey | optionKey), keyLabel: "⎋"),
-        GlobalShortcut(keyCode: UInt32(kVK_ANSI_Q), carbonModifiers: UInt32(cmdKey | controlKey), keyLabel: "Q"),
-        GlobalShortcut(keyCode: UInt32(kVK_ANSI_3), carbonModifiers: UInt32(cmdKey | shiftKey), keyLabel: "3"),
-        GlobalShortcut(keyCode: UInt32(kVK_ANSI_4), carbonModifiers: UInt32(cmdKey | shiftKey), keyLabel: "4"),
-        GlobalShortcut(keyCode: UInt32(kVK_ANSI_5), carbonModifiers: UInt32(cmdKey | shiftKey), keyLabel: "5")
+    private struct ReservedShortcutMask {
+        let keyCode: UInt32
+        let requiredModifiers: UInt32
+    }
+
+    private static func isReservedSystemShortcut(
+        keyCode: UInt32,
+        modifiers: UInt32
+    ) -> Bool {
+        let voiceOverModifiers = UInt32(controlKey | optionKey)
+        if modifiers & voiceOverModifiers == voiceOverModifiers {
+            return true
+        }
+
+        return reservedSystemShortcutMasks.contains {
+            $0.keyCode == keyCode
+                && modifiers & $0.requiredModifiers == $0.requiredModifiers
+        }
+    }
+
+    private static let reservedSystemShortcutMasks: [ReservedShortcutMask] = [
+        ReservedShortcutMask(keyCode: UInt32(kVK_Escape), requiredModifiers: UInt32(cmdKey | optionKey)),
+        ReservedShortcutMask(keyCode: UInt32(kVK_ANSI_Q), requiredModifiers: UInt32(cmdKey | controlKey)),
+        ReservedShortcutMask(keyCode: UInt32(kVK_ANSI_Q), requiredModifiers: UInt32(cmdKey | shiftKey)),
+        ReservedShortcutMask(keyCode: UInt32(kVK_ANSI_D), requiredModifiers: UInt32(cmdKey | optionKey)),
+        ReservedShortcutMask(keyCode: UInt32(kVK_ANSI_F), requiredModifiers: UInt32(cmdKey | controlKey)),
+        ReservedShortcutMask(keyCode: UInt32(kVK_ANSI_H), requiredModifiers: UInt32(cmdKey | optionKey)),
+        ReservedShortcutMask(keyCode: UInt32(kVK_ANSI_M), requiredModifiers: UInt32(cmdKey | optionKey)),
+        ReservedShortcutMask(keyCode: UInt32(kVK_ANSI_W), requiredModifiers: UInt32(cmdKey | optionKey)),
+        ReservedShortcutMask(keyCode: UInt32(kVK_ANSI_3), requiredModifiers: UInt32(cmdKey | shiftKey)),
+        ReservedShortcutMask(keyCode: UInt32(kVK_ANSI_4), requiredModifiers: UInt32(cmdKey | shiftKey)),
+        ReservedShortcutMask(keyCode: UInt32(kVK_ANSI_5), requiredModifiers: UInt32(cmdKey | shiftKey)),
+        ReservedShortcutMask(keyCode: UInt32(kVK_F5), requiredModifiers: UInt32(cmdKey | optionKey))
     ]
 
     private static let specialKeyLabels: [UInt32: String] = [
@@ -213,16 +245,25 @@ enum GlobalShortcutRegistrationFailure: Error, Equatable {
 }
 
 enum GlobalShortcutRegistrationTransaction {
-    static func replace<Reference, Failure: Error>(
+    static func replace<Reference>(
         current: Reference?,
-        registerCandidate: () -> Result<Reference, Failure>,
-        unregister: (Reference) -> Void
-    ) -> Result<Reference, Failure> {
+        registerCandidate: () -> Result<Reference, GlobalShortcutRegistrationFailure>,
+        unregister: (Reference) -> Result<Void, GlobalShortcutRegistrationFailure>,
+        rollbackCandidate: (Reference) -> Void
+    ) -> Result<Reference, GlobalShortcutRegistrationFailure> {
         switch registerCandidate() {
         case .failure(let error):
             return .failure(error)
         case .success(let candidate):
-            if let current { unregister(current) }
+            if let current {
+                switch unregister(current) {
+                case .success:
+                    break
+                case .failure(let error):
+                    rollbackCandidate(candidate)
+                    return .failure(error)
+                }
+            }
             return .success(candidate)
         }
     }
@@ -232,7 +273,8 @@ enum GlobalShortcutError: Equatable {
     case invalid(GlobalShortcutValidationError)
     case occupied
     case registrationFailed
-    case savedShortcutResetToDefault
+    case unregistrationFailed
+    case savedShortcutUnavailableUsingDefault
     case noShortcutAvailable
 
     func message(language: WidgetLanguage) -> String {
@@ -249,15 +291,20 @@ enum GlobalShortcutError: Equatable {
                 "系统无法注册该快捷键，请选择其他组合。",
                 "The system could not register this shortcut. Choose another combination."
             )
-        case .savedShortcutResetToDefault:
+        case .unregistrationFailed:
             return language.text(
-                "保存的快捷键不可用，已恢复为默认快捷键。",
-                "The saved shortcut was unavailable and has been reset to the default."
+                "系统无法停用当前快捷键，原设置已保留。",
+                "The system could not disable the current shortcut. The previous setting was kept."
+            )
+        case .savedShortcutUnavailableUsingDefault:
+            return language.text(
+                "保存的快捷键本次不可用，暂时使用默认快捷键；保存的选择未更改。",
+                "The saved shortcut is unavailable for this launch, so the default is active temporarily. Your saved choice was not changed."
             )
         case .noShortcutAvailable:
             return language.text(
-                "快捷键注册失败，当前未设置全局快捷键。",
-                "Shortcut registration failed. No global shortcut is currently set."
+                "快捷键注册失败，本次启动没有可用的全局快捷键；保存的选择未更改。",
+                "Shortcut registration failed. No global shortcut is active for this launch, and your saved choice was not changed."
             )
         }
     }

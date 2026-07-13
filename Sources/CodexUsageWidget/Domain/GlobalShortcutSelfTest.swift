@@ -6,12 +6,12 @@ enum GlobalShortcutSelfTest {
     private static let signature: OSType = 0x43535455 // CSTU
     private static let oldShortcut = GlobalShortcut(
         keyCode: UInt32(kVK_F11),
-        carbonModifiers: UInt32(cmdKey | controlKey | optionKey | shiftKey),
+        carbonModifiers: UInt32(cmdKey | shiftKey),
         keyLabel: "F11"
     )
     private static let occupiedShortcut = GlobalShortcut(
         keyCode: UInt32(kVK_F12),
-        carbonModifiers: UInt32(cmdKey | controlKey | optionKey | shiftKey),
+        carbonModifiers: UInt32(cmdKey | shiftKey),
         keyLabel: "F12"
     )
 
@@ -68,9 +68,21 @@ enum GlobalShortcutSelfTest {
             ("option+shift+A", shortcut(kVK_ANSI_A, optionKey | shiftKey, "A"), .requiresCommandOrControl),
             ("command+option+escape", shortcut(kVK_Escape, cmdKey | optionKey, "⎋"), .reservedSystemShortcut),
             ("command+control+Q", shortcut(kVK_ANSI_Q, cmdKey | controlKey, "Q"), .reservedSystemShortcut),
+            ("command+shift+Q", shortcut(kVK_ANSI_Q, cmdKey | shiftKey, "Q"), .reservedSystemShortcut),
+            ("command+option+shift+Q", shortcut(kVK_ANSI_Q, cmdKey | optionKey | shiftKey, "Q"), .reservedSystemShortcut),
+            ("command+option+D", shortcut(kVK_ANSI_D, cmdKey | optionKey, "D"), .reservedSystemShortcut),
+            ("command+control+F", shortcut(kVK_ANSI_F, cmdKey | controlKey, "F"), .reservedSystemShortcut),
+            ("command+option+H", shortcut(kVK_ANSI_H, cmdKey | optionKey, "H"), .reservedSystemShortcut),
             ("command+shift+3", shortcut(kVK_ANSI_3, cmdKey | shiftKey, "3"), .reservedSystemShortcut),
+            ("command+shift+4", shortcut(kVK_ANSI_4, cmdKey | shiftKey, "4"), .reservedSystemShortcut),
+            ("command+shift+5", shortcut(kVK_ANSI_5, cmdKey | shiftKey, "5"), .reservedSystemShortcut),
+            ("control+command+shift+3", shortcut(kVK_ANSI_3, controlKey | cmdKey | shiftKey, "3"), .reservedSystemShortcut),
+            ("command+option+F5", shortcut(kVK_F5, cmdKey | optionKey, "F5"), .reservedSystemShortcut),
+            ("control+option+right", shortcut(kVK_RightArrow, controlKey | optionKey, "→"), .reservedSystemShortcut),
+            ("control+option+command+K", shortcut(kVK_ANSI_K, controlKey | optionKey | cmdKey, "K"), .reservedSystemShortcut),
             ("command+shift+U", shortcut(kVK_ANSI_U, cmdKey | shiftKey, "U"), nil),
-            ("control+option+F8", shortcut(kVK_F8, controlKey | optionKey, "F8"), nil),
+            ("control+shift+K", shortcut(kVK_ANSI_K, controlKey | shiftKey, "K"), nil),
+            ("control+option+F8", shortcut(kVK_F8, controlKey | optionKey, "F8"), .reservedSystemShortcut),
             ("command+shift+comma", shortcut(kVK_ANSI_Comma, cmdKey | shiftKey, ","), .unsupportedKey)
         ]
 
@@ -100,6 +112,7 @@ enum GlobalShortcutSelfTest {
             custom.save(defaults: defaults)
             let settings = AppSettings(defaults: defaults)
             settings.globalShortcutRegistration = { _ in .success(()) }
+            settings.globalShortcutUnregistration = { .success(()) }
             settings.resetGlobalShortcut()
             if settings.globalShortcut != .default
                 || GlobalShortcut.load(defaults: defaults) != .default {
@@ -119,11 +132,54 @@ enum GlobalShortcutSelfTest {
             oldShortcut.save(defaults: defaults)
             let settings = AppSettings(defaults: defaults)
             settings.globalShortcutRegistration = { _ in .failure(.occupied) }
-            settings.requestGlobalShortcut(candidate)
-            if settings.globalShortcut != oldShortcut
+            if settings.requestGlobalShortcut(candidate)
+                || settings.globalShortcut != oldShortcut
                 || GlobalShortcut.load(defaults: defaults) != oldShortcut
                 || settings.globalShortcutError != .occupied {
                 failures.append("registration failure did not retain the old stored shortcut")
+            }
+
+            if !settings.requestGlobalShortcut(oldShortcut)
+                || settings.globalShortcutError != nil
+                || GlobalShortcut.load(defaults: defaults) != oldShortcut {
+                failures.append("reselecting the active shortcut did not clear the error")
+            }
+        }
+
+        withDefaults { defaults in
+            let oldShortcut = self.shortcut(kVK_ANSI_K, cmdKey | shiftKey, "K")
+            oldShortcut.save(defaults: defaults)
+            let settings = AppSettings(defaults: defaults)
+            settings.globalShortcutUnregistration = { .failure(.failed) }
+            settings.clearGlobalShortcut()
+            if settings.globalShortcut != oldShortcut
+                || GlobalShortcut.load(defaults: defaults) != oldShortcut
+                || settings.globalShortcutError != .unregistrationFailed {
+                failures.append("unregistration failure did not retain the old shortcut")
+            }
+        }
+
+        withDefaults { defaults in
+            let custom = self.shortcut(kVK_ANSI_K, cmdKey | shiftKey, "K")
+            custom.save(defaults: defaults)
+            let settings = AppSettings(defaults: defaults)
+            settings.handleInitialGlobalShortcutFailure(defaultRegistered: true)
+            if settings.globalShortcut != .default
+                || settings.globalShortcutError != .savedShortcutUnavailableUsingDefault
+                || GlobalShortcut.load(defaults: defaults) != custom {
+                failures.append("startup fallback overwrote the saved shortcut")
+            }
+        }
+
+        withDefaults { defaults in
+            let custom = self.shortcut(kVK_ANSI_K, cmdKey | shiftKey, "K")
+            custom.save(defaults: defaults)
+            let settings = AppSettings(defaults: defaults)
+            settings.handleInitialGlobalShortcutFailure(defaultRegistered: false)
+            if settings.globalShortcut != nil
+                || settings.globalShortcutError != .noShortcutAvailable
+                || GlobalShortcut.load(defaults: defaults) != custom {
+                failures.append("startup failure without fallback overwrote the saved shortcut")
             }
         }
     }
@@ -238,13 +294,18 @@ enum GlobalShortcutSelfTest {
 
     private static func checkReplacementTransaction(failures: inout [String]) {
         var unregistered: [Int] = []
+        var rolledBack: [Int] = []
         let failed: Result<Int, GlobalShortcutRegistrationFailure> =
             GlobalShortcutRegistrationTransaction.replace(
                 current: 1,
                 registerCandidate: { .failure(.occupied) },
-                unregister: { unregistered.append($0) }
+                unregister: {
+                    unregistered.append($0)
+                    return .success(())
+                },
+                rollbackCandidate: { rolledBack.append($0) }
             )
-        guard failed == .failure(.occupied), unregistered.isEmpty else {
+        guard failed == .failure(.occupied), unregistered.isEmpty, rolledBack.isEmpty else {
             failures.append("failed replacement unregistered the old shortcut")
             return
         }
@@ -253,10 +314,25 @@ enum GlobalShortcutSelfTest {
             GlobalShortcutRegistrationTransaction.replace(
                 current: 1,
                 registerCandidate: { .success(2) },
-                unregister: { unregistered.append($0) }
+                unregister: {
+                    unregistered.append($0)
+                    return .success(())
+                },
+                rollbackCandidate: { rolledBack.append($0) }
             )
-        if succeeded != .success(2) || unregistered != [1] {
+        if succeeded != .success(2) || unregistered != [1] || !rolledBack.isEmpty {
             failures.append("successful replacement did not swap registrations transactionally")
+        }
+
+        let unregisterFailed: Result<Int, GlobalShortcutRegistrationFailure> =
+            GlobalShortcutRegistrationTransaction.replace(
+                current: 3,
+                registerCandidate: { .success(4) },
+                unregister: { _ in .failure(.failed) },
+                rollbackCandidate: { rolledBack.append($0) }
+            )
+        if unregisterFailed != .failure(.failed) || rolledBack != [4] {
+            failures.append("old unregistration failure did not roll back the candidate")
         }
     }
 

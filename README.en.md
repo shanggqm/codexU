@@ -42,8 +42,9 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 ## Keyboard Shortcuts
 
 - `Command + U`: shows or hides the main window by default and can be customized in Settings. If the window is minimized, the shortcut restores it and brings it forward.
-- Custom combinations require at least two modifiers, including Command or Control; macOS-reserved combinations are rejected.
-- Press Backspace while recording to clear the shortcut; you can restore the default or record another shortcut later.
+- Custom combinations require at least two modifiers, including Command or Control; known high-risk system and accessibility shortcuts are rejected.
+- Press Backspace while recording to clear the shortcut, or Escape to cancel; you can restore the default or record another shortcut later.
+- The app detects conflicts with other exclusive hotkey registrations. macOS does not provide a complete query for nonexclusive registrations, so choose another combination if another app still conflicts.
 - Menu bar gauge icon: opens the runtime menu. Clicking a Codex or Claude Code card opens the main widget with that runtime selected.
 - Menu bar runtime menu: shows quick Codex / Claude Code status and provides Open, Settings, and Quit actions.
 - Settings window: configure language, appearance, menu bar mode/quota direction/visible metrics, always-on-top and close-window behavior, and control automatic checks or manually check GitHub Releases from the System section.

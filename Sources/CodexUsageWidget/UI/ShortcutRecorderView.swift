@@ -5,7 +5,7 @@ import SwiftUI
 struct ShortcutRecorderView: NSViewRepresentable {
     let shortcut: GlobalShortcut?
     let language: WidgetLanguage
-    let onRecord: (GlobalShortcut) -> Void
+    let onRecord: (GlobalShortcut) -> Bool
     let onClear: () -> Void
 
     func makeNSView(context: Context) -> ShortcutRecorderControl {
@@ -29,9 +29,10 @@ struct ShortcutRecorderView: NSViewRepresentable {
 final class ShortcutRecorderControl: NSButton {
     var shortcut: GlobalShortcut?
     var language: WidgetLanguage = .automatic
-    var onRecord: ((GlobalShortcut) -> Void)?
+    var onRecord: ((GlobalShortcut) -> Bool)?
     var onClear: (() -> Void)?
     private var isRecording = false
+    private var keyDownMonitor: Any?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -47,11 +48,19 @@ final class ShortcutRecorderControl: NSButton {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        removeKeyDownMonitor()
+    }
+
     override var acceptsFirstResponder: Bool { true }
 
     @objc private func beginRecording() {
+        guard let window, window.makeFirstResponder(self) else {
+            NSSound.beep()
+            return
+        }
         isRecording = true
-        window?.makeFirstResponder(self)
+        installKeyDownMonitor()
         updateTitle()
     }
 
@@ -60,12 +69,29 @@ final class ShortcutRecorderControl: NSButton {
             super.keyDown(with: event)
             return
         }
-        if event.keyCode == UInt16(kVK_Delete) {
+        handleRecordingKeyDown(event)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let didResign = super.resignFirstResponder()
+        if didResign { cancelRecording() }
+        return didResign
+    }
+
+    private func handleRecordingKeyDown(_ event: NSEvent) {
+        guard !event.isARepeat else { return }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let hasShortcutModifier = flags.contains(.command)
+            || flags.contains(.option)
+            || flags.contains(.shift)
+            || flags.contains(.control)
+
+        if event.keyCode == UInt16(kVK_Delete), !hasShortcutModifier {
             onClear?()
             finishRecording()
             return
         }
-        if event.keyCode == UInt16(kVK_Escape) {
+        if event.keyCode == UInt16(kVK_Escape), !hasShortcutModifier {
             finishRecording()
             return
         }
@@ -73,19 +99,43 @@ final class ShortcutRecorderControl: NSButton {
             NSSound.beep()
             return
         }
-        onRecord?(candidate)
+        guard onRecord?(candidate) == true else {
+            NSSound.beep()
+            return
+        }
         finishRecording()
     }
 
-    override func resignFirstResponder() -> Bool {
-        isRecording = false
-        updateTitle()
-        return super.resignFirstResponder()
+    private func installKeyDownMonitor() {
+        removeKeyDownMonitor()
+        keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  self.isRecording,
+                  self.window?.isKeyWindow == true,
+                  self.window?.firstResponder === self
+            else { return event }
+            self.handleRecordingKeyDown(event)
+            return nil
+        }
+    }
+
+    private func removeKeyDownMonitor() {
+        if let keyDownMonitor {
+            NSEvent.removeMonitor(keyDownMonitor)
+            self.keyDownMonitor = nil
+        }
     }
 
     private func finishRecording() {
         isRecording = false
-        window?.makeFirstResponder(nil)
+        removeKeyDownMonitor()
+        updateTitle()
+    }
+
+    private func cancelRecording() {
+        guard isRecording || keyDownMonitor != nil else { return }
+        isRecording = false
+        removeKeyDownMonitor()
         updateTitle()
     }
 
@@ -93,8 +143,14 @@ final class ShortcutRecorderControl: NSButton {
         title = isRecording
             ? language.text("请按新快捷键", "Press shortcut")
             : shortcut?.displayName ?? language.text("未设置", "Not set")
+        let help = language.text(
+            "激活后录制新快捷键；录制时按退格键清空，按 Esc 取消。",
+            "Activate to record a new shortcut. While recording, press Backspace to clear or Escape to cancel."
+        )
+        toolTip = help
         setAccessibilityLabel(language.text("主窗口快捷键", "Main window shortcut"))
         setAccessibilityValue(title)
+        setAccessibilityHelp(help)
     }
 
     func refresh() {
