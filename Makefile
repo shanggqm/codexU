@@ -8,7 +8,7 @@ MACOS_DIR := $(APP_DIR)/Contents/MacOS
 RESOURCES_DIR := $(APP_DIR)/Contents/Resources
 SOURCES := $(shell find Sources/CodexUsageWidget -name '*.swift' | sort)
 APP_ICON := Resources/codexU.icns
-DEPLOYMENT_TARGET ?= 14.0
+DEPLOYMENT_TARGET ?= 13.0
 HOST_ARCH := $(shell uname -m)
 APPLE_SILICON_TARGET_TRIPLE ?= arm64-apple-macos$(DEPLOYMENT_TARGET)
 INTEL_TARGET_TRIPLE ?= x86_64-apple-macos$(DEPLOYMENT_TARGET)
@@ -26,7 +26,7 @@ else
 CODESIGN_FLAGS := --force --deep --options runtime --timestamp --sign "$(SIGN_IDENTITY)" $(CODESIGN_EXTRA_FLAGS)
 endif
 
-.PHONY: build run probe test-statistics-time-zone install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
+.PHONY: build run probe test-statistics-time-zone test-macos-compatibility install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
 
 build:
 	rm -rf "$(APP_DIR)"
@@ -51,6 +51,9 @@ probe: build
 
 test-statistics-time-zone:
 	./scripts/test-statistics-time-zone.sh
+
+test-macos-compatibility:
+	./scripts/test-macos-compatibility.sh
 
 install: build
 	rm -rf "/Applications/$(APP_NAME).app"

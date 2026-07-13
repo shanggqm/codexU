@@ -47,7 +47,7 @@ ${DISPLAY_NAME} ${VERSION}
 3. 如果 macOS 提示来自互联网下载，请在系统设置 > 隐私与安全性中允许打开。
 
 依赖:
-- macOS 14 或更新版本。
+- macOS 13 或更新版本。
 - 本机已安装并登录 Codex。
 - Codex 至少使用过一次，以便生成 ~/.codex/state_5.sqlite。
 
