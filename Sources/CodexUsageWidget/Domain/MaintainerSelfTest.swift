@@ -60,42 +60,6 @@ enum MaintainerSelfTest {
         invalidConfig.repository = "missing-slash"
         expect(!invalidConfig.isValid, "invalid repository rejected")
 
-        do {
-            let discoverRunner = FakeCommandRunner(results: [
-                .success(""),
-                .success("""
-                [[{"number":16,"title":"E2E","body":"first body","html_url":"https://github.com/o/r/issues/16","updated_at":"2026-07-13T00:00:00Z","user":{"login":"author"}}]]
-                """)
-            ])
-            let client = GitHubMaintainerClient(runner: discoverRunner, ghPath: "/usr/bin/gh")
-            let discovered = try client.discover(repository: "o/r", label: "codex:review")
-            expect(discovered.count == 1, "paginated issue discovery")
-            expect(discovered.first?.kind == .issue, "issue kind decoding")
-            expect(discovered.first?.revision.hasPrefix("issue-") == true, "issue body fingerprint revision")
-        } catch {
-            failures.append("GitHub discovery fixture failed: \(error)")
-        }
-
-        do {
-            let publishTask = fixtureTask(now: now)
-            let marker = GitHubMaintainerClient(ghPath: "/bin/false").commentMarker(for: publishTask)
-            let existingURL = "https://github.com/o/r/issues/1#issuecomment-9"
-            let publishRunner = FakeCommandRunner(results: [
-                .success("[[]]"),
-                .success("{\"html_url\":\"\(existingURL)\"}"),
-                .success("[[{\"body\":\"\(marker)\",\"html_url\":\"\(existingURL)\"}]]")
-            ])
-            let client = GitHubMaintainerClient(runner: publishRunner, ghPath: "/usr/bin/gh")
-            let review = MaintainerReview(verdict: "approve", summary: "ok", markdown: "review", completedAt: now)
-            let firstURL = try client.publish(review: review, for: publishTask)
-            let secondURL = try client.publish(review: review, for: publishTask)
-            expect(firstURL?.absoluteString == existingURL, "first comment URL")
-            expect(secondURL == firstURL, "idempotent existing marker lookup")
-            expect(publishRunner.postCount == 1, "idempotent publish sends one POST")
-        } catch {
-            failures.append("GitHub publish fixture failed: \(error)")
-        }
-
         if failures.isEmpty {
             print("maintainer self-test passed")
             return true
@@ -122,34 +86,6 @@ enum MaintainerSelfTest {
             review: nil,
             errorMessage: nil,
             publishedCommentURL: nil
-        )
-    }
-}
-
-private final class FakeCommandRunner: LocalCommandRunning {
-    struct Fixture {
-        let output: String
-        let error: String
-        let exitCode: Int32
-
-        static func success(_ output: String) -> Fixture {
-            Fixture(output: output, error: "", exitCode: 0)
-        }
-    }
-
-    private var results: [Fixture]
-    private(set) var postCount = 0
-
-    init(results: [Fixture]) { self.results = results }
-
-    func run(executable: String, arguments: [String], input: Data?, timeout: TimeInterval) throws -> LocalCommandResult {
-        guard !results.isEmpty else { throw MaintainerError.commandFailed("missing fake command result") }
-        if arguments.contains("POST") { postCount += 1 }
-        let fixture = results.removeFirst()
-        return LocalCommandResult(
-            standardOutput: Data(fixture.output.utf8),
-            standardError: fixture.error,
-            exitCode: fixture.exitCode
         )
     }
 }

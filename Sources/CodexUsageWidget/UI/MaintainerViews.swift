@@ -39,22 +39,6 @@ struct MaintainerPanel: View {
             }
             labeledField(language.text("本地仓库", "Local repository"), text: $store.configuration.localRepositoryPath, placeholder: "/Users/me/project")
 
-            HStack(spacing: 7) {
-                Text(language.text("轮询间隔", "Poll interval"))
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 68, alignment: .leading)
-                Picker("", selection: $store.configuration.pollIntervalSeconds) {
-                    Text("30s").tag(TimeInterval(30))
-                    Text("60s").tag(TimeInterval(60))
-                    Text("2m").tag(TimeInterval(120))
-                    Text("5m").tag(TimeInterval(300))
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .controlSize(.small)
-            }
-
             HStack(spacing: 8) {
                 Button(language.text("保存配置", "Save")) { store.saveConfiguration() }
                     .buttonStyle(.borderedProminent)
