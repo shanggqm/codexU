@@ -2704,6 +2704,7 @@ enum WidgetThemeMode: String, CaseIterable, Equatable {
     case system
     case light
     case dark
+    case absolutely
 
     static let storageKey = "codexU.interfaceThemeMode"
 
@@ -2722,6 +2723,8 @@ enum WidgetThemeMode: String, CaseIterable, Equatable {
             return .light
         case .dark:
             return .dark
+        case .absolutely:
+            return .light
         }
     }
 
@@ -2737,6 +2740,8 @@ enum WidgetThemeMode: String, CaseIterable, Equatable {
             NSApp.appearance = NSAppearance(named: .aqua)
         case .dark:
             NSApp.appearance = NSAppearance(named: .darkAqua)
+        case .absolutely:
+            NSApp.appearance = NSAppearance(named: .aqua)
         }
     }
 }
@@ -3006,7 +3011,7 @@ struct UsageWidgetView: View {
     private var windowSurface: some View {
         if #available(macOS 26.0, *) {
             RoundedRectangle(cornerRadius: Self.windowCornerRadius, style: .continuous)
-                .fill(Color.clear)
+                .fill(WidgetPalette.windowBaseFill(effectiveColorScheme))
                 .glassEffect(
                     .regular.tint(WidgetPalette.sectionTint(effectiveColorScheme)),
                     in: .rect(cornerRadius: Self.windowCornerRadius, style: .continuous)
@@ -3418,12 +3423,14 @@ struct ThemeSwitch: View {
                 .tag(WidgetThemeMode.light)
             Image(systemName: "moon.fill")
                 .tag(WidgetThemeMode.dark)
+            Image(systemName: "sparkles")
+                .tag(WidgetThemeMode.absolutely)
         }
         .labelsHidden()
         .pickerStyle(.segmented)
         .controlSize(.mini)
-        .frame(width: 86)
-        .help(language.text("外观：自动、浅色、深色", "Appearance: system, light, dark"))
+        .frame(width: 114)
+        .help(language.text("外观：自动、浅色、深色、Absolutely", "Appearance: system, light, dark, Absolutely"))
         .accessibilityLabel(language.text("外观模式", "Appearance mode"))
     }
 }
@@ -3581,16 +3588,17 @@ struct SettingsPanelView: View {
 
                     SettingsPickerRow(
                         title: language.text("外观", "Appearance"),
-                        detail: language.text("默认跟随系统", "System is the default")
+                        detail: language.text("选择明暗模式或 Absolutely 暖色主题", "Choose a color mode or the warm Absolutely theme")
                     ) {
                         SettingsSegmentedControl(
                             selection: $settings.themeMode,
                             options: [
                                 SettingsSegmentOption(value: .system, title: language.text("自动", "System")),
                                 SettingsSegmentOption(value: .light, title: language.text("浅色", "Light")),
-                                SettingsSegmentOption(value: .dark, title: language.text("深色", "Dark"))
+                                SettingsSegmentOption(value: .dark, title: language.text("深色", "Dark")),
+                                SettingsSegmentOption(value: .absolutely, title: "Absolutely")
                             ],
-                            width: 190
+                            width: 260
                         )
                     }
                 }
@@ -6693,19 +6701,52 @@ struct RingRGBColor: Equatable {
 }
 
 enum WidgetPalette {
-    static let brandPrimaryRGB = RingRGBColor(red: 0.157, green: 0.400, blue: 0.969) // #2866F7
-    static let brandPrimaryStrongRGB = RingRGBColor(red: 0.122, green: 0.349, blue: 0.929) // #1F59ED
-    static let brandPrimaryLightRGB = RingRGBColor(red: 0.482, green: 0.627, blue: 1.000) // #7BA0FF
-    static let brandSecondaryRGB = RingRGBColor(red: 0.545, green: 0.427, blue: 1.000) // #8B6DFF
-    static let brandSecondaryStrongRGB = RingRGBColor(red: 0.427, green: 0.271, blue: 0.910) // #6D45E8
-    static let brandHighlightRGB = RingRGBColor(red: 0.855, green: 0.639, blue: 0.980) // #DAA3FA
+    private static var usesAbsolutelyTheme: Bool {
+        WidgetThemeMode.storedOrAutomatic() == .absolutely
+    }
 
-    static let brandPrimary = brandPrimaryRGB.color
-    static let brandPrimaryStrong = brandPrimaryStrongRGB.color
-    static let brandPrimaryLight = brandPrimaryLightRGB.color
-    static let brandSecondary = brandSecondaryRGB.color
-    static let brandSecondaryStrong = brandSecondaryStrongRGB.color
-    static let brandHighlight = brandHighlightRGB.color
+    static var brandPrimaryRGB: RingRGBColor {
+        usesAbsolutelyTheme
+            ? RingRGBColor(red: 0.800, green: 0.471, blue: 0.361) // #CC785C
+            : RingRGBColor(red: 0.157, green: 0.400, blue: 0.969) // #2866F7
+    }
+
+    static var brandPrimaryStrongRGB: RingRGBColor {
+        usesAbsolutelyTheme
+            ? RingRGBColor(red: 0.710, green: 0.337, blue: 0.235) // #B5563C
+            : RingRGBColor(red: 0.122, green: 0.349, blue: 0.929) // #1F59ED
+    }
+
+    static var brandPrimaryLightRGB: RingRGBColor {
+        usesAbsolutelyTheme
+            ? RingRGBColor(red: 0.910, green: 0.655, blue: 0.557) // #E8A78E
+            : RingRGBColor(red: 0.482, green: 0.627, blue: 1.000) // #7BA0FF
+    }
+
+    static var brandSecondaryRGB: RingRGBColor {
+        usesAbsolutelyTheme
+            ? RingRGBColor(red: 0.478, green: 0.396, blue: 0.365) // #7A655D
+            : RingRGBColor(red: 0.545, green: 0.427, blue: 1.000) // #8B6DFF
+    }
+
+    static var brandSecondaryStrongRGB: RingRGBColor {
+        usesAbsolutelyTheme
+            ? RingRGBColor(red: 0.349, green: 0.286, blue: 0.263) // #594943
+            : RingRGBColor(red: 0.427, green: 0.271, blue: 0.910) // #6D45E8
+    }
+
+    static var brandHighlightRGB: RingRGBColor {
+        usesAbsolutelyTheme
+            ? RingRGBColor(red: 0.839, green: 0.737, blue: 0.690) // #D6BCB0
+            : RingRGBColor(red: 0.855, green: 0.639, blue: 0.980) // #DAA3FA
+    }
+
+    static var brandPrimary: Color { brandPrimaryRGB.color }
+    static var brandPrimaryStrong: Color { brandPrimaryStrongRGB.color }
+    static var brandPrimaryLight: Color { brandPrimaryLightRGB.color }
+    static var brandSecondary: Color { brandSecondaryRGB.color }
+    static var brandSecondaryStrong: Color { brandSecondaryStrongRGB.color }
+    static var brandHighlight: Color { brandHighlightRGB.color }
 
     static let statusSuccess = Color(red: 0.188, green: 0.820, blue: 0.345) // #30D158
     static let statusInfo = Color(red: 0.039, green: 0.518, blue: 1.000) // #0A84FF
@@ -6715,26 +6756,52 @@ enum WidgetPalette {
     static let dataReasoning = Color(red: 0.749, green: 0.353, blue: 0.949) // #BF5AF2
     static let dataFlowParticle = NSColor.white
 
-    static let surfaceTrack = Color.primary.opacity(0.10)
+    static var surfaceTrack: Color {
+        usesAbsolutelyTheme
+            ? Color(red: 0.078, green: 0.078, blue: 0.075).opacity(0.10)
+            : Color.primary.opacity(0.10)
+    }
     static let dataZero = statusNeutral.opacity(0.35)
 
     static func windowTint(_ colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? Color.white.opacity(0.028) : Color.white.opacity(0.050)
+        if usesAbsolutelyTheme {
+            return Color(red: 0.941, green: 0.937, blue: 0.918).opacity(0.58) // #F0EFEA
+        }
+        return colorScheme == .dark ? Color.white.opacity(0.028) : Color.white.opacity(0.050)
+    }
+
+    static func windowBaseFill(_ colorScheme: ColorScheme) -> Color {
+        if usesAbsolutelyTheme {
+            return Color(red: 0.969, green: 0.965, blue: 0.949).opacity(0.78) // #F7F6F2
+        }
+        return Color.clear
     }
 
     static func sectionTint(_ colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? Color.white.opacity(0.040) : Color.white.opacity(0.070)
+        if usesAbsolutelyTheme {
+            return Color(red: 0.941, green: 0.937, blue: 0.918).opacity(0.62) // #F0EFEA
+        }
+        return colorScheme == .dark ? Color.white.opacity(0.040) : Color.white.opacity(0.070)
     }
 
     static func sectionFill(_ colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? Color.white.opacity(0.070) : Color.white.opacity(0.460)
+        if usesAbsolutelyTheme {
+            return Color(red: 0.969, green: 0.965, blue: 0.949).opacity(0.94) // #F7F6F2
+        }
+        return colorScheme == .dark ? Color.white.opacity(0.070) : Color.white.opacity(0.460)
     }
 
     static func sectionStroke(_ colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? Color.white.opacity(0.080) : Color.black.opacity(0.060)
+        if usesAbsolutelyTheme {
+            return Color(red: 0.420, green: 0.392, blue: 0.373).opacity(0.18)
+        }
+        return colorScheme == .dark ? Color.white.opacity(0.080) : Color.black.opacity(0.060)
     }
 
     static func cardFill(_ colorScheme: ColorScheme, elevated: Bool = false) -> Color {
+        if usesAbsolutelyTheme {
+            return Color.white.opacity(elevated ? 0.88 : 0.66)
+        }
         if colorScheme == .dark {
             return Color.white.opacity(elevated ? 0.140 : 0.100)
         }
@@ -6742,6 +6809,9 @@ enum WidgetPalette {
     }
 
     static func cardStroke(_ colorScheme: ColorScheme, elevated: Bool = false) -> Color {
+        if usesAbsolutelyTheme {
+            return Color(red: 0.420, green: 0.392, blue: 0.373).opacity(elevated ? 0.20 : 0.14)
+        }
         if colorScheme == .dark {
             return Color.white.opacity(elevated ? 0.110 : 0.080)
         }
@@ -6749,15 +6819,24 @@ enum WidgetPalette {
     }
 
     static func controlFill(_ colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? Color.white.opacity(0.085) : Color.white.opacity(0.520)
+        if usesAbsolutelyTheme {
+            return Color(red: 0.922, green: 0.910, blue: 0.875).opacity(0.76)
+        }
+        return colorScheme == .dark ? Color.white.opacity(0.085) : Color.white.opacity(0.520)
     }
 
     static func controlSelectedFill(_ colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? Color.white.opacity(0.180) : Color.black.opacity(0.105)
+        if usesAbsolutelyTheme {
+            return brandPrimary.opacity(0.16)
+        }
+        return colorScheme == .dark ? Color.white.opacity(0.180) : Color.black.opacity(0.105)
     }
 
     static func controlStroke(_ colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? Color.white.opacity(0.070) : Color.black.opacity(0.050)
+        if usesAbsolutelyTheme {
+            return Color(red: 0.420, green: 0.392, blue: 0.373).opacity(0.14)
+        }
+        return colorScheme == .dark ? Color.white.opacity(0.070) : Color.black.opacity(0.050)
     }
 
     static func statusDangerFill(_ colorScheme: ColorScheme) -> Color {
@@ -6769,16 +6848,16 @@ enum WidgetPalette {
     }
 }
 
-private let quotaPrimaryStartColor = WidgetPalette.brandPrimaryLightRGB
-private let quotaPrimaryEndColor = WidgetPalette.brandPrimaryRGB
-private let quotaPrimaryColor = quotaPrimaryEndColor.color
-private let quotaPrimaryTrackColor = WidgetPalette.surfaceTrack
-private let quotaSecondaryStartColor = WidgetPalette.brandHighlightRGB
-private let quotaSecondaryEndColor = WidgetPalette.brandSecondaryRGB
-private let quotaSecondaryColor = quotaSecondaryEndColor.color
-private let quotaSecondaryTrackColor = WidgetPalette.surfaceTrack
+private var quotaPrimaryStartColor: RingRGBColor { WidgetPalette.brandPrimaryLightRGB }
+private var quotaPrimaryEndColor: RingRGBColor { WidgetPalette.brandPrimaryRGB }
+private var quotaPrimaryColor: Color { quotaPrimaryEndColor.color }
+private var quotaPrimaryTrackColor: Color { WidgetPalette.surfaceTrack }
+private var quotaSecondaryStartColor: RingRGBColor { WidgetPalette.brandHighlightRGB }
+private var quotaSecondaryEndColor: RingRGBColor { WidgetPalette.brandSecondaryRGB }
+private var quotaSecondaryColor: Color { quotaSecondaryEndColor.color }
+private var quotaSecondaryTrackColor: Color { WidgetPalette.surfaceTrack }
 private let uncachedInputColor = WidgetPalette.statusInfo
-private let cachedInputColor = WidgetPalette.brandSecondary
+private var cachedInputColor: Color { WidgetPalette.brandSecondary }
 private let outputTokenColor = WidgetPalette.statusWarning
 private let dashboardGridSpacing: CGFloat = 10
 private let dashboardCardPadding: CGFloat = 10
