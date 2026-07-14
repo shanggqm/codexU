@@ -3424,6 +3424,7 @@ struct UsageWidgetView: View {
                     DualQuotaRing(
                         fiveHourQuota: snapshot.fiveHourQuota,
                         sevenDayQuota: snapshot.sevenDayQuota,
+                        monthlyQuota: snapshot.monthlyQuota,
                         quotaReadSucceeded: snapshot.quotaReadSucceeded,
                         quotaIsStale: selectedQuotaIsStale,
                         language: language,
@@ -3435,6 +3436,7 @@ struct UsageWidgetView: View {
                     QuotaResetSummary(
                         fiveHourQuota: snapshot.fiveHourQuota,
                         sevenDayQuota: snapshot.sevenDayQuota,
+                        monthlyQuota: snapshot.monthlyQuota,
                         language: language
                     )
                     .frame(width: 154, height: 26)
@@ -3600,7 +3602,9 @@ struct UsageWidgetView: View {
 
     private var shouldShowEnvironmentChecklist: Bool {
         if snapshot.messages.contains("正在读取 codexU 数据") { return false }
-        let quotaUnavailable = snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil
+        let quotaUnavailable = snapshot.fiveHourQuota == nil
+            && snapshot.sevenDayQuota == nil
+            && snapshot.monthlyQuota == nil
         let hasQuotaProtocolWarning = snapshot.messages.contains { $0.contains("额度窗口") }
         return (!snapshot.messages.isEmpty && (quotaUnavailable || hasQuotaProtocolWarning || snapshot.local == nil))
             || snapshot.account == nil
@@ -3653,7 +3657,9 @@ struct UsageWidgetView: View {
         }
 
         if snapshot.account?.type == "cli-proxy-api",
-           snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil {
+           snapshot.fiveHourQuota == nil
+            && snapshot.sevenDayQuota == nil
+            && snapshot.monthlyQuota == nil {
             let cpaMessage = snapshot.messages.first { $0.contains("CPA") }
                 ?? "CPA 账号额度暂不可用"
             items.append(DiagnosticItem(
@@ -3678,7 +3684,9 @@ struct UsageWidgetView: View {
             return items
         }
 
-        if (snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil) || snapshot.account == nil {
+        if (snapshot.fiveHourQuota == nil
+            && snapshot.sevenDayQuota == nil
+            && snapshot.monthlyQuota == nil) || snapshot.account == nil {
             if messages.contains("未找到 codex") {
                 items.append(DiagnosticItem(
                     id: "codex-missing",
@@ -4071,8 +4079,8 @@ struct SettingsPanelView: View {
                         SettingsBaseRow(
                             title: language.text("立即检查", "Check now"),
                             detail: language.text(
-                                "读取账号列表和各账号 5h / 7d 额度",
-                                "Reads the account list and each account's 5h / 7d quota"
+                                "读取账号列表和各账号 5h / 7d / 月额度",
+                                "Reads the account list and each account's 5h / 7d / monthly quota"
                             )
                         ) {
                             Button(language.text("刷新额度", "Refresh quota")) {
@@ -4823,11 +4831,13 @@ private enum QuotaRingGeometry {
 private enum QuotaWindowKind: String, Hashable {
     case fiveHour
     case sevenDay
+    case monthly
 
     var compactTitle: String {
         switch self {
         case .fiveHour: "5h"
         case .sevenDay: "7d"
+        case .monthly: "30d"
         }
     }
 
@@ -4835,6 +4845,7 @@ private enum QuotaWindowKind: String, Hashable {
         switch self {
         case .fiveHour: quotaPrimaryStartColor
         case .sevenDay: quotaSecondaryStartColor
+        case .monthly: WidgetPalette.brandSecondaryRGB
         }
     }
 
@@ -4842,6 +4853,7 @@ private enum QuotaWindowKind: String, Hashable {
         switch self {
         case .fiveHour: quotaPrimaryEndColor
         case .sevenDay: quotaSecondaryEndColor
+        case .monthly: WidgetPalette.brandSecondaryStrongRGB
         }
     }
 
@@ -4849,6 +4861,7 @@ private enum QuotaWindowKind: String, Hashable {
         switch self {
         case .fiveHour: quotaPrimaryColor
         case .sevenDay: quotaSecondaryColor
+        case .monthly: WidgetPalette.brandSecondaryStrong
         }
     }
 }
@@ -4885,7 +4898,11 @@ private struct QuotaRingPresentation: Equatable {
 
     let items: [QuotaRingItem]
 
-    init(fiveHourQuota: RateWindow?, sevenDayQuota: RateWindow?) {
+    init(
+        fiveHourQuota: RateWindow?,
+        sevenDayQuota: RateWindow?,
+        monthlyQuota: RateWindow? = nil
+    ) {
         var items: [QuotaRingItem] = []
         if let fiveHourQuota {
             items.append(QuotaRingItem(kind: .fiveHour, window: fiveHourQuota))
@@ -4893,7 +4910,10 @@ private struct QuotaRingPresentation: Equatable {
         if let sevenDayQuota {
             items.append(QuotaRingItem(kind: .sevenDay, window: sevenDayQuota))
         }
-        self.items = items
+        if let monthlyQuota {
+            items.append(QuotaRingItem(kind: .monthly, window: monthlyQuota))
+        }
+        self.items = Array(items.prefix(2))
     }
 
     var topology: Topology {
@@ -4940,7 +4960,9 @@ private struct QuotaRingPresentation: Equatable {
     }
 
     func diameter(for item: QuotaRingItem) -> CGFloat {
-        guard topology == .dual, item.kind == .sevenDay else {
+        guard topology == .dual,
+              items.firstIndex(of: item) == 1
+        else {
             return QuotaRingGeometry.outerDiameter
         }
         return QuotaRingGeometry.innerDiameter
@@ -4969,6 +4991,7 @@ private enum QuotaRingHoverTarget {
 struct DualQuotaRing: View {
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let quotaReadSucceeded: Bool
     let quotaIsStale: Bool
     let language: WidgetLanguage
@@ -4980,7 +5003,8 @@ struct DualQuotaRing: View {
     private var presentation: QuotaRingPresentation {
         QuotaRingPresentation(
             fiveHourQuota: fiveHourQuota,
-            sevenDayQuota: sevenDayQuota
+            sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota
         )
     }
 
@@ -5841,6 +5865,7 @@ private enum QuotaParticleAnimationSelfTest {
 
         let fullFiveHour = quotaWindow(usedPercent: 0, durationMins: 300)
         let fullSevenDay = quotaWindow(usedPercent: 0, durationMins: 10_080)
+        let fullMonthly = quotaWindow(usedPercent: 0, durationMins: 43_200)
         let noQuotaPresentation = QuotaRingPresentation(
             fiveHourQuota: nil,
             sevenDayQuota: nil
@@ -5856,6 +5881,21 @@ private enum QuotaParticleAnimationSelfTest {
         let dualPresentation = QuotaRingPresentation(
             fiveHourQuota: fullFiveHour,
             sevenDayQuota: fullSevenDay
+        )
+        let monthlyOnlyPresentation = QuotaRingPresentation(
+            fiveHourQuota: nil,
+            sevenDayQuota: nil,
+            monthlyQuota: fullMonthly
+        )
+        let weeklyMonthlyPresentation = QuotaRingPresentation(
+            fiveHourQuota: nil,
+            sevenDayQuota: fullSevenDay,
+            monthlyQuota: fullMonthly
+        )
+        let threeWindowPresentation = QuotaRingPresentation(
+            fiveHourQuota: fullFiveHour,
+            sevenDayQuota: fullSevenDay,
+            monthlyQuota: fullMonthly
         )
 
         expect(noQuotaPresentation.topology == .none, "zero quota windows should use the empty presentation")
@@ -5881,6 +5921,19 @@ private enum QuotaParticleAnimationSelfTest {
         expect(
             dualPresentation.items.map(\.kind) == [.fiveHour, .sevenDay],
             "dual presentation should retain the stable 5h then 7d order"
+        )
+        expect(
+            monthlyOnlyPresentation.items.map(\.kind) == [.monthly]
+                && monthlyOnlyPresentation.topology == .single,
+            "monthly-only quota should use one correctly labeled ring"
+        )
+        expect(
+            weeklyMonthlyPresentation.items.map(\.kind) == [.sevenDay, .monthly],
+            "7d and monthly quotas should share the dual-ring presentation"
+        )
+        expect(
+            threeWindowPresentation.items.map(\.kind) == [.fiveHour, .sevenDay],
+            "the main ring should keep stable 5h/7d priority when all three windows exist"
         )
         expect(
             dualPresentation.activeRadii == [
@@ -6256,12 +6309,14 @@ private struct QuotaUnavailablePlaceholder: View {
 struct QuotaResetSummary: View {
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let language: WidgetLanguage
 
     private var presentation: QuotaRingPresentation {
         QuotaRingPresentation(
             fiveHourQuota: fiveHourQuota,
-            sevenDayQuota: sevenDayQuota
+            sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota
         )
     }
 

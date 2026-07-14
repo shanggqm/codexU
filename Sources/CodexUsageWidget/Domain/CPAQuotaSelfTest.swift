@@ -240,6 +240,30 @@ enum CPAQuotaSelfTest {
         expect(pool.accounts.allSatisfy { $0.status == .available }, "mock account quotas should be available")
         expect(pool.representative?.displayName == "Monthly", "a low monthly-only account should drive the conservative pool signal")
         expect(pool.representative?.monthlyQuota?.remainingPercent == 5, "representative quota should retain its monthly window")
+        let monthlyStatusPresentation = StatusItemPresentationBuilder().build(
+            source: StatusItemSourceSnapshot(
+                runtime: .codex,
+                fiveHourRemainingPercent: nil,
+                fiveHourResetsAt: nil,
+                sevenDayRemainingPercent: nil,
+                sevenDayResetsAt: nil,
+                monthlyRemainingPercent: 5,
+                monthlyResetsAt: now.addingTimeInterval(86_400),
+                todayTokens: nil
+            ),
+            preferences: .default,
+            language: .zh,
+            now: now
+        )
+        expect(
+            monthlyStatusPresentation.quotaMetrics.map(\.metric) == [.monthlyQuota],
+            "monthly-only quota should replace unavailable configured 5h/7d metrics in the menu bar"
+        )
+        expect(
+            monthlyStatusPresentation.quotaMetrics.first?.label == "30d",
+            "monthly menu bar quota should use an unambiguous compact label"
+        )
+        expect(!monthlyStatusPresentation.showsNoActiveQuota, "monthly-only quota must not be shown as unlimited")
         CPAQuotaMockURLProtocol.handler = nil
 
         if failures.isEmpty {

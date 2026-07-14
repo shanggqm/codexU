@@ -16,6 +16,11 @@ private struct StatusItemQuotaPalette {
                 start: WidgetPalette.brandHighlightRGB.nsColor,
                 end: WidgetPalette.brandSecondaryRGB.nsColor
             )
+        case .monthly:
+            return StatusItemQuotaPalette(
+                start: WidgetPalette.brandSecondaryRGB.nsColor,
+                end: WidgetPalette.brandSecondaryStrongRGB.nsColor
+            )
         case nil:
             return StatusItemQuotaPalette(
                 start: NSColor.secondaryLabelColor,

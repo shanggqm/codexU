@@ -29,7 +29,7 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 ## 功能
 
 - 展示 Codex 5 小时和 7 天额度的剩余比例、已用比例和重置时间；按协议返回的实际窗口时长识别额度类型，并根据可信响应自适应单环/双环、单进度条/双进度条布局。
-- 可选接入 CLI Proxy API（CPA）远程账号池：通过设置中的 CPA 地址和管理 Key 读取各 Codex 账号的 5 小时/7 天额度，主环与菜单栏采用当前最低额度账号，并在主窗口展示全部账号的独立额度。
+- 可选接入 CLI Proxy API（CPA）远程账号池：通过设置中的 CPA 地址和管理 Key 读取各 Codex 账号的 5 小时、7 天和月额度，主环与菜单栏采用当前最低额度账号，并在主窗口展示全部账号的独立额度。
 - 新增状态栏 Runtime 菜单：点击菜单栏图标后先展示 Codex / Claude Code 卡片、5 小时和 7 日剩余、今日 token 与总 token。
 - 状态栏支持简约、经典、丰富三档透明显示：简约保留加粗额度环，经典在独立进度环内显示额度数字，丰富展示完整标签、进度条和重置时间；只有一个有效额度窗口时会自动收敛为单额度布局。
 - 环形额度保留完整粒子效果；默认只在主窗口可见、置前且聚焦时渲染，省电模式只在鼠标悬停额度环时渲染，后台、低电量、温控或“减少动态效果”状态下自动停用。
@@ -61,9 +61,9 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 2. 在 codexU 中填写 CPA 根地址和管理 Key。远程地址必须使用 HTTPS，本机 `127.0.0.1` / `localhost` 可以使用 HTTP。
 3. 点击“刷新额度”，或等待配置变更后的自动刷新。
 
-codexU 按 CPA [Management API](https://help.router-for.me/management/api) 的当前协议读取 `/v0/management/auth-files`，再通过 `/v0/management/api-call` 查询每个 Codex 账号的 ChatGPT `wham/usage` 额度。CPA v6.10.0 起不再内置 usage 汇总，因此这里展示的是账号官方 5 小时/7 天额度，不是 CPA 请求量统计。
+codexU 按 CPA [Management API](https://help.router-for.me/management/api) 的当前协议读取 `/v0/management/auth-files`，再通过 `/v0/management/api-call` 查询每个 Codex 账号的 ChatGPT `wham/usage` 额度。CPA v6.10.0 起不再内置 usage 汇总，因此这里展示的是账号官方 5 小时、7 天和月额度，不是 CPA 请求量统计。
 
-- 主额度环和菜单栏显示当前“最低额度账号”的两个窗口，作为账号池的保守健康信号；不会把不同账号的百分比或重置时间做平均。
+- 主额度环和菜单栏显示当前“最低额度账号”的有效窗口，作为账号池的保守健康信号；月额度是唯一窗口时使用 `30d` 标识。若同一账号同时返回 5h、7d 和月额度，主环保留稳定的 5h/7d 双环，月额度继续显示在账号卡片中。
 - 主窗口账号卡片展示每个启用中的 Codex 账号；邮箱在进入界面和 JSON dump 前会脱敏。
 - 管理 Key 只保存在 macOS 钥匙串，不写入 `UserDefaults`、日志或 JSON dump。
 - CPA 只替代 Codex 账户额度源；token、趋势、项目和任务仍来自本机 Codex 记录。

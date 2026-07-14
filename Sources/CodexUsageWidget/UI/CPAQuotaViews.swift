@@ -28,7 +28,7 @@ struct CPAQuotaAccountsView: View {
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
                     ForEach(accounts) { account in
                         CPAQuotaAccountCard(account: account, isStale: isStale, language: language)
                     }
@@ -64,18 +64,30 @@ private struct CPAQuotaAccountCard: View {
             }
 
             if account.status == .available {
-                CPAQuotaCompactBar(
-                    label: "5h",
-                    quota: account.fiveHourQuota,
-                    colors: [WidgetPalette.brandPrimaryLight, WidgetPalette.brandPrimary],
-                    language: language
-                )
-                CPAQuotaCompactBar(
-                    label: "7d",
-                    quota: account.sevenDayQuota,
-                    colors: [WidgetPalette.brandHighlight, WidgetPalette.brandSecondary],
-                    language: language
-                )
+                if account.fiveHourQuota != nil {
+                    CPAQuotaCompactBar(
+                        label: "5h",
+                        quota: account.fiveHourQuota,
+                        colors: [WidgetPalette.brandPrimaryLight, WidgetPalette.brandPrimary],
+                        language: language
+                    )
+                }
+                if account.sevenDayQuota != nil {
+                    CPAQuotaCompactBar(
+                        label: "7d",
+                        quota: account.sevenDayQuota,
+                        colors: [WidgetPalette.brandHighlight, WidgetPalette.brandSecondary],
+                        language: language
+                    )
+                }
+                if account.monthlyQuota != nil {
+                    CPAQuotaCompactBar(
+                        label: language.text("月", "30d"),
+                        quota: account.monthlyQuota,
+                        colors: [WidgetPalette.brandSecondary, WidgetPalette.brandSecondaryStrong],
+                        language: language
+                    )
+                }
             } else {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -91,7 +103,11 @@ private struct CPAQuotaAccountCard: View {
             }
         }
         .padding(10)
-        .frame(width: 220, height: 102, alignment: .topLeading)
+        .frame(
+            width: 220,
+            height: cardHeight,
+            alignment: .topLeading
+        )
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(WidgetPalette.cardFill(colorScheme))
@@ -119,6 +135,23 @@ private struct CPAQuotaAccountCard: View {
             return WidgetPalette.statusWarning
         }
         return WidgetPalette.statusSuccess
+    }
+
+    private var cardHeight: CGFloat {
+        guard account.status == .available else { return 102 }
+        let quotaCount = [
+            account.fiveHourQuota,
+            account.sevenDayQuota,
+            account.monthlyQuota
+        ].compactMap { $0 }.count
+        switch quotaCount {
+        case 0, 1:
+            return 82
+        case 2:
+            return 102
+        default:
+            return 128
+        }
     }
 }
 

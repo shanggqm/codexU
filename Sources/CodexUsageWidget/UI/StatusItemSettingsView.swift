@@ -61,7 +61,7 @@ struct StatusItemSettingsView: View {
 
         SettingsToggleRow(
             title: language.text("重置倒计时", "Reset countdown"),
-            detail: language.text("仅在丰富模式中附加到 5h/7d 额度行", "Shown beside 5h/7d only in Rich mode")
+            detail: language.text("仅在丰富模式中附加到额度行", "Shown beside quota rows only in Rich mode")
         ) {
             SettingsSwitchToggle(
                 isOn: resetCountdownBinding,
@@ -283,6 +283,8 @@ private struct StatusItemMetricMultiSelectControl: View {
             return "5h"
         case .sevenDayQuota:
             return "7d"
+        case .monthlyQuota:
+            return "30d"
         case .todayTokens:
             return language.text("今日", "Today")
         }
@@ -294,6 +296,8 @@ private struct StatusItemMetricMultiSelectControl: View {
             return WidgetPalette.brandPrimary
         case .sevenDayQuota:
             return WidgetPalette.brandSecondary
+        case .monthlyQuota:
+            return WidgetPalette.brandSecondaryStrong
         case .todayTokens:
             return WidgetPalette.brandPrimaryStrong
         }

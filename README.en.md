@@ -17,7 +17,7 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 ## Features
 
 - Shows remaining and used Codex quota for the 5-hour and 7-day windows, including reset times; quota types are classified by their protocol-reported durations and trusted responses automatically select a single- or dual-quota layout.
-- Optionally connects to a remote CLI Proxy API (CPA) account pool. Settings accept the CPA URL and management key, the main rings and menu bar use the account with the lowest remaining quota, and the main window shows each Codex account separately.
+- Optionally connects to a remote CLI Proxy API (CPA) account pool. Settings accept the CPA URL and management key, read 5-hour, 7-day, and monthly Codex quota, use the account with the lowest remaining quota for the main signal, and show each account separately.
 - Adds a menu bar runtime menu with separate Codex and Claude Code cards, 5-hour/7-day remaining quota, today's token usage, and total tokens today.
 - Offers transparent Minimal, Classic, and Rich menu bar modes: Minimal keeps thicker quota rings, Classic keeps the quota number inside each progress ring, and Rich keeps full labels, bars, and reset times. A single active window automatically collapses to a single-quota layout.
 - Preserves the full ring particle effect while rendering it only when the main window is visible, frontmost, and focused by default. Power Saving mode renders particles only while the ring is hovered, and animation stops in the background or under Low Power, thermal, and Reduce Motion constraints.
@@ -49,9 +49,9 @@ When Codex traffic is routed through a remote [CLIProxyAPI](https://github.com/r
 2. Enter the CPA root URL and management key in codexU. Remote URLs must use HTTPS; loopback `127.0.0.1` / `localhost` may use HTTP.
 3. Click **Refresh quota**, or wait for the automatic refresh after configuration changes.
 
-codexU follows the current CPA [Management API](https://help.router-for.me/management/api): it reads `/v0/management/auth-files`, then uses `/v0/management/api-call` to query each Codex account's ChatGPT `wham/usage` quota. CPA removed built-in usage aggregation in v6.10.0, so this feature shows official account 5-hour/7-day quota rather than CPA request statistics.
+codexU follows the current CPA [Management API](https://help.router-for.me/management/api): it reads `/v0/management/auth-files`, then uses `/v0/management/api-call` to query each Codex account's ChatGPT `wham/usage` quota. CPA removed built-in usage aggregation in v6.10.0, so this feature shows official account 5-hour, 7-day, and monthly quota rather than CPA request statistics.
 
-- The main rings and menu bar use the account with the lowest remaining quota as a conservative pool-health signal. Percentages and reset times from different accounts are never averaged.
+- The main rings and menu bar use the account with the lowest remaining quota as a conservative pool-health signal. A monthly-only window is labeled `30d`. If an account returns 5h, 7d, and monthly windows together, the main rings retain the stable 5h/7d pair while the account card keeps the monthly window visible.
 - Account cards show every enabled Codex account. Email addresses are masked before entering the UI or JSON dump.
 - The management key is stored only in macOS Keychain, never `UserDefaults`, logs, or JSON dump.
 - CPA replaces only the Codex account quota source. Tokens, trends, projects, and tasks still come from local Codex records.
