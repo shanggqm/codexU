@@ -132,7 +132,10 @@ enum RuntimeQuotaContinuity {
                 snapshot: next.snapshot.replacingQuotaWindows(
                     fiveHourQuota: last.snapshot.fiveHourQuota,
                     sevenDayQuota: last.snapshot.sevenDayQuota,
-                    quotaReadSucceeded: false
+                    quotaReadSucceeded: false,
+                    cpaQuotaAccounts: last.snapshot.cpaQuotaAccounts.isEmpty
+                        ? next.snapshot.cpaQuotaAccounts
+                        : last.snapshot.cpaQuotaAccounts
                 ),
                 status: .stale,
                 quotaSourceLabel: last.quotaSourceLabel.hasSuffix(" · stale")
