@@ -2967,6 +2967,31 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    @Published var cpaEnabled: Bool {
+        didSet {
+            defaults.set(cpaEnabled, forKey: CPAConfigurationStore.enabledKey)
+        }
+    }
+
+    @Published var cpaBaseURL: String {
+        didSet {
+            defaults.set(cpaBaseURL, forKey: CPAConfigurationStore.baseURLKey)
+        }
+    }
+
+    @Published var cpaManagementKey: String {
+        didSet {
+            do {
+                try CPAKeychainStore.saveManagementKey(cpaManagementKey)
+                cpaCredentialStorageFailed = false
+            } catch {
+                cpaCredentialStorageFailed = true
+            }
+        }
+    }
+
+    @Published private(set) var cpaCredentialStorageFailed: Bool
+
     @Published private(set) var skippedUpdateVersion: String? {
         didSet {
             if let skippedUpdateVersion {
@@ -2991,6 +3016,7 @@ final class AppSettings: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        let storedCPAConfiguration = CPAConfigurationStore.load(defaults: defaults)
         language = WidgetLanguage.storedOrAutomatic(defaults: defaults)
         themeMode = WidgetThemeMode.storedOrAutomatic(defaults: defaults)
         particleAnimationMode = ParticleAnimationMode.storedOrDefault(defaults: defaults)
@@ -3006,6 +3032,10 @@ final class AppSettings: ObservableObject {
             automaticUpdateChecksEnabled = defaults.bool(forKey: Self.automaticUpdateChecksEnabledKey)
         }
         skippedUpdateVersion = defaults.string(forKey: Self.skippedUpdateVersionKey)
+        cpaEnabled = storedCPAConfiguration.isEnabled
+        cpaBaseURL = storedCPAConfiguration.baseURL
+        cpaManagementKey = storedCPAConfiguration.managementKey
+        cpaCredentialStorageFailed = false
         visibleRuntimeScopes = Self.storedVisibleRuntimeScopes(defaults: defaults)
         statusItemPreferences = StatusItemPreferencesStore.load(defaults: defaults)
         let storedShortcut = GlobalShortcut.load(defaults: defaults)
@@ -3016,6 +3046,14 @@ final class AppSettings: ObservableObject {
             globalShortcut = storedShortcut
         }
         globalShortcutError = nil
+    }
+
+    var cpaConfiguration: CPAConfiguration {
+        CPAConfiguration(
+            isEnabled: cpaEnabled,
+            baseURL: cpaBaseURL,
+            managementKey: cpaManagementKey
+        )
     }
 
     func isRuntimeVisible(_ scope: RuntimeScope) -> Bool {
@@ -9546,6 +9584,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-rate-limits") {
             exit(CodexRateLimitNormalizerSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-cpa-quota") {
+            exit(CPAQuotaSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--self-test-updates") {
