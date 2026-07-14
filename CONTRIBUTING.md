@@ -28,6 +28,12 @@ Check the local data reader:
 make probe
 ```
 
+Run the CLI Proxy API quota parser and Management API simulation:
+
+```sh
+make test-cpa-quota
+```
+
 ## Pull Requests
 
 - Keep changes focused on one bug fix or feature.

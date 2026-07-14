@@ -70,6 +70,24 @@ private func runtimeLegacyJSONObject(_ snapshot: UsageSnapshot) -> [String: Any]
         ] as [String: Any]
     }
 
+    if !snapshot.cpaQuotaAccounts.isEmpty {
+        object["cpaAccounts"] = snapshot.cpaQuotaAccounts.map { account in
+            var accountObject: [String: Any] = [
+                "displayName": account.displayName,
+                "planType": runtimeJSONValue(account.planType),
+                "status": account.status.rawValue,
+                "message": runtimeJSONValue(account.message)
+            ]
+            if let fiveHourQuota = account.fiveHourQuota {
+                accountObject["fiveHour"] = runtimeJSONObject(fiveHourQuota)
+            }
+            if let sevenDayQuota = account.sevenDayQuota {
+                accountObject["sevenDay"] = runtimeJSONObject(sevenDayQuota)
+            }
+            return accountObject
+        }
+    }
+
     if let local = snapshot.local {
         object["local"] = runtimeJSONObject(local)
     }

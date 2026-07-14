@@ -17,6 +17,7 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 ## Features
 
 - Shows remaining and used Codex quota for the 5-hour and 7-day windows, including reset times; quota types are classified by their protocol-reported durations and trusted responses automatically select a single- or dual-quota layout.
+- Optionally connects to a remote CLI Proxy API (CPA) account pool. Settings accept the CPA URL and management key, the main rings and menu bar use the account with the lowest remaining quota, and the main window shows each Codex account separately.
 - Adds a menu bar runtime menu with separate Codex and Claude Code cards, 5-hour/7-day remaining quota, today's token usage, and total tokens today.
 - Offers transparent Minimal, Classic, and Rich menu bar modes: Minimal keeps thicker quota rings, Classic keeps the quota number inside each progress ring, and Rich keeps full labels, bars, and reset times. A single active window automatically collapses to a single-quota layout.
 - Preserves the full ring particle effect while rendering it only when the main window is visible, frontmost, and focused by default. Power Saving mode renders particles only while the ring is hovered, and animation stops in the background or under Low Power, thermal, and Reduce Motion constraints.
@@ -36,9 +37,24 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - Shows top tool calls and top Skill usage to explain the structure of local Codex work.
 - Runs as a standard macOS window with Dock, system window controls, minimization, and optional background running after the main window is closed. Closing the main window hides the Dock icon and keeps the menu bar item.
 - Uses `Command + U` by default to show or hide the main window, and the shortcut can be customized in Settings. The menu bar runtime menu can also open the main window, open settings, or quit.
-- Includes a Settings window for Chinese/English UI text, system/light/dark appearance, menu bar content with live preview, always-on-top behavior, close-window behavior, system status, and update check configuration.
+- Includes a Settings window for Chinese/English UI text, system/light/dark appearance, CPA quota source, menu bar content with live preview, always-on-top behavior, close-window behavior, system status, and update check configuration.
 - Checks GitHub Releases for newer versions by default, including beta releases, and offers the DMG that matches the current Mac architecture. It does not silently download or install updates, and automatic checks can be turned off.
-- Reads data locally and does not upload usage, threads, or account data to a third-party service.
+- Reads local data by default and does not upload usage, threads, or account data. Only when CPA is explicitly enabled does it send quota queries to the user-configured CPA server, without local usage, thread, path, or log data.
+
+## CLI Proxy API Quota
+
+When Codex traffic is routed through a remote [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) account pool, enable the CPA quota source under **Settings > CLI Proxy API**:
+
+1. Configure `remote-management.secret-key` on the CPA server. Cross-machine access also requires remote management to be allowed.
+2. Enter the CPA root URL and management key in codexU. Remote URLs must use HTTPS; loopback `127.0.0.1` / `localhost` may use HTTP.
+3. Click **Refresh quota**, or wait for the automatic refresh after configuration changes.
+
+codexU follows the current CPA [Management API](https://help.router-for.me/management/api): it reads `/v0/management/auth-files`, then uses `/v0/management/api-call` to query each Codex account's ChatGPT `wham/usage` quota. CPA removed built-in usage aggregation in v6.10.0, so this feature shows official account 5-hour/7-day quota rather than CPA request statistics.
+
+- The main rings and menu bar use the account with the lowest remaining quota as a conservative pool-health signal. Percentages and reset times from different accounts are never averaged.
+- Account cards show every enabled Codex account. Email addresses are masked before entering the UI or JSON dump.
+- The management key is stored only in macOS Keychain, never `UserDefaults`, logs, or JSON dump.
+- CPA replaces only the Codex account quota source. Tokens, trends, projects, and tasks still come from local Codex records.
 
 ## Keyboard Shortcuts
 
@@ -48,7 +64,7 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - The app detects conflicts with other exclusive hotkey registrations. macOS does not provide a complete query for nonexclusive registrations, so choose another combination if another app still conflicts.
 - Menu bar gauge icon: opens the runtime menu. Clicking a Codex or Claude Code card opens the main widget with that runtime selected.
 - Menu bar runtime menu: shows quick Codex / Claude Code status and provides Open, Settings, and Quit actions.
-- Settings window: configure language, appearance, menu bar mode/quota direction/visible metrics, always-on-top and close-window behavior, and control automatic checks or manually check GitHub Releases from the System section.
+- Settings window: configure language, appearance, CPA URL and management key, menu bar mode/quota direction/visible metrics, always-on-top and close-window behavior, and control automatic checks or manually check GitHub Releases from the System section.
 - Main-window refresh button: immediately refresh quota, token usage, trend, and task board.
 - System window controls: close, minimize, or zoom the main window. After closing, reopen from the menu bar item or shortcut; quit from the menu bar runtime menu or the app menu.
 
@@ -82,8 +98,8 @@ After installation, codexU checks GitHub Releases for new versions at most once 
 ## Requirements
 
 - macOS 14 or later.
-- A local Codex installation.
-- A signed-in Codex account for quota data.
+- A local Codex installation is used for local token, trend, project, and task statistics; CPA-only remote quota does not depend on the local account quota.
+- A signed-in local Codex account for the local quota source, or an accessible CPA Management API for the CPA quota source.
 - Codex must have been used at least once so `~/.codex/state_5.sqlite` exists.
 - Claude Code support is optional. Historical tokens come from `~/.claude/projects/**/*.jsonl`; quota requires a local statusLine snapshot cache.
 - Xcode Command Line Tools for building from source.
