@@ -25,9 +25,10 @@ struct CPAAuthRecord: Equatable {
     let chatGPTAccountID: String?
 }
 
-private struct CPAQuotaPayload: Equatable {
+struct CPAParsedQuota: Equatable {
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let planType: String?
     let isAuthoritative: Bool
 }
@@ -155,56 +156,71 @@ final class CPAQuotaReader {
         _ body: String,
         now: Date,
         fallbackPlanType: String? = nil
-    ) throws -> (fiveHour: RateWindow?, sevenDay: RateWindow?, planType: String?, authoritative: Bool) {
+    ) throws -> CPAParsedQuota {
         guard let data = body.data(using: .utf8),
               let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             throw ReaderError.malformedPayload
         }
-        let rateLimit = dictionaryValue(root, keys: ["rate_limit", "rateLimit"])
-        guard let rateLimit else {
-            throw ReaderError.malformedPayload
+
+        var standardWindows: [RateWindow?] = []
+        var monthlyWindows: [RateWindow] = []
+        var hasWindowFields = false
+        var hasMalformedWindow = false
+
+        if let rateLimit = dictionaryValue(root, keys: ["rate_limit", "rateLimit"]) {
+            let result = parseRateLimitWindows(rateLimit, now: now, monthlyHint: false)
+            hasWindowFields = hasWindowFields || result.hasWindowFields
+            hasMalformedWindow = hasMalformedWindow || result.hasMalformedWindow
+            for window in result.windows {
+                if isMonthlyWindow(window) {
+                    monthlyWindows.append(window)
+                } else {
+                    standardWindows.append(window)
+                }
+            }
         }
 
-        let primaryValue = value(rateLimit, keys: ["primary_window", "primaryWindow"])
-        let secondaryValue = value(rateLimit, keys: ["secondary_window", "secondaryWindow"])
-        let limitReached = boolValue(value(rateLimit, keys: ["limit_reached", "limitReached"])) == true
-        let allowed = boolValue(rateLimit["allowed"])
-        let exhaustedHint = limitReached || allowed == false
-        let primary = parseWindow(
-            primaryValue,
-            fallbackDurationMins: 300,
-            now: now,
-            exhaustedHint: exhaustedHint
-        )
-        let secondary = parseWindow(
-            secondaryValue,
-            fallbackDurationMins: 10_080,
-            now: now,
-            exhaustedHint: exhaustedHint
-        )
-        let normalized = CodexRateLimitNormalizer.normalize([primary, secondary])
-        let hasWindowFields = rateLimit.keys.contains("primary_window")
-            || rateLimit.keys.contains("primaryWindow")
-            || rateLimit.keys.contains("secondary_window")
-            || rateLimit.keys.contains("secondaryWindow")
-        let hasMalformedWindow = [
-            (primaryValue, primary),
-            (secondaryValue, secondary)
-        ].contains { raw, parsed in
-            guard let raw, !(raw is NSNull) else { return false }
-            return parsed == nil
+        for entry in additionalRateLimitEntries(root) {
+            guard let rateLimit = dictionaryValue(entry, keys: ["rate_limit", "rateLimit"]) else { continue }
+            let name = stringValue(value(entry, keys: [
+                "limit_name", "limitName", "metered_feature", "meteredFeature"
+            ]))
+            let result = parseRateLimitWindows(
+                rateLimit,
+                now: now,
+                monthlyHint: isMonthlyLabel(name)
+            )
+            hasWindowFields = hasWindowFields || result.hasWindowFields
+            hasMalformedWindow = hasMalformedWindow || result.hasMalformedWindow
+            monthlyWindows.append(contentsOf: result.windows.filter(isMonthlyWindow))
         }
-        let authoritative = CodexRateLimitNormalizer.isAuthoritative(
-            hasWindowFields: hasWindowFields,
-            hasMalformedWindow: hasMalformedWindow,
-            normalized: normalized
-        )
+
+        let normalized = CodexRateLimitNormalizer.normalize(standardWindows)
+        let monthlyQuota = monthlyWindows.min { lhs, rhs in
+            lhs.remainingPercent < rhs.remainingPercent
+        }
+        let hasAmbiguousStandardWindows = normalized.fiveHourMatchCount > 1
+            || normalized.sevenDayMatchCount > 1
+            || !normalized.unclassified.isEmpty
+        let hasRecognizedWindow = normalized.fiveHour != nil
+            || normalized.sevenDay != nil
+            || monthlyQuota != nil
+        let authoritative = hasWindowFields
+            && !hasMalformedWindow
+            && !hasAmbiguousStandardWindows
+            && hasRecognizedWindow
         let accountPlan = dictionaryValue(root, keys: ["account_plan", "accountPlan"])
         let planType = stringValue(value(root, keys: ["plan_type", "planType"]))
             ?? stringValue(value(accountPlan ?? [:], keys: ["plan_type", "planType"]))
             ?? fallbackPlanType
-        return (normalized.fiveHour, normalized.sevenDay, planType, authoritative)
+        return CPAParsedQuota(
+            fiveHourQuota: normalized.fiveHour,
+            sevenDayQuota: normalized.sevenDay,
+            monthlyQuota: monthlyQuota,
+            planType: planType,
+            isAuthoritative: authoritative
+        )
     }
 
     private func fetchAuthRecords(baseURL: URL, managementKey: String) throws -> [CPAAuthRecord] {
@@ -240,7 +256,9 @@ final class CPAQuotaReader {
                         now: now
                     )
                     guard payload.isAuthoritative,
-                          payload.fiveHourQuota != nil || payload.sevenDayQuota != nil
+                          payload.fiveHourQuota != nil
+                            || payload.sevenDayQuota != nil
+                            || payload.monthlyQuota != nil
                     else {
                         throw ReaderError.malformedPayload
                     }
@@ -251,6 +269,7 @@ final class CPAQuotaReader {
                         status: .available,
                         fiveHourQuota: payload.fiveHourQuota,
                         sevenDayQuota: payload.sevenDayQuota,
+                        monthlyQuota: payload.monthlyQuota,
                         message: nil
                     )
                 } catch let error as ReaderError {
@@ -272,7 +291,7 @@ final class CPAQuotaReader {
         baseURL: URL,
         managementKey: String,
         now: Date
-    ) throws -> CPAQuotaPayload {
+    ) throws -> CPAParsedQuota {
         let url = managementURL(baseURL: baseURL, path: "api-call")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -301,15 +320,10 @@ final class CPAQuotaReader {
             now: now,
             fallbackPlanType: record.planType
         )
-        if !(200..<300).contains(envelope.statusCode), !parsed.authoritative {
+        if !(200..<300).contains(envelope.statusCode), !parsed.isAuthoritative {
             throw ReaderError.upstreamStatus(envelope.statusCode)
         }
-        return CPAQuotaPayload(
-            fiveHourQuota: parsed.fiveHour,
-            sevenDayQuota: parsed.sevenDay,
-            planType: parsed.planType,
-            isAuthoritative: parsed.authoritative
-        )
+        return parsed
     }
 
     private func perform(_ request: URLRequest) throws -> Data {
@@ -381,8 +395,74 @@ final class CPAQuotaReader {
             status: .unavailable,
             fiveHourQuota: nil,
             sevenDayQuota: nil,
+            monthlyQuota: nil,
             message: message
         )
+    }
+
+    private struct ParsedRateLimitWindows {
+        let windows: [RateWindow]
+        let hasWindowFields: Bool
+        let hasMalformedWindow: Bool
+    }
+
+    private static func parseRateLimitWindows(
+        _ rateLimit: [String: Any],
+        now: Date,
+        monthlyHint: Bool
+    ) -> ParsedRateLimitWindows {
+        let primaryValue = value(rateLimit, keys: ["primary_window", "primaryWindow"])
+        let secondaryValue = value(rateLimit, keys: ["secondary_window", "secondaryWindow"])
+        let limitReached = boolValue(value(rateLimit, keys: ["limit_reached", "limitReached"])) == true
+        let allowed = boolValue(rateLimit["allowed"])
+        let exhaustedHint = limitReached || allowed == false
+        let primary = parseWindow(
+            primaryValue,
+            fallbackDurationMins: monthlyHint ? 43_200 : 300,
+            now: now,
+            exhaustedHint: exhaustedHint
+        )
+        let secondary = parseWindow(
+            secondaryValue,
+            fallbackDurationMins: monthlyHint ? 43_200 : 10_080,
+            now: now,
+            exhaustedHint: exhaustedHint
+        )
+        let rawAndParsed = [(primaryValue, primary), (secondaryValue, secondary)]
+        let hasWindowFields = rateLimit.keys.contains("primary_window")
+            || rateLimit.keys.contains("primaryWindow")
+            || rateLimit.keys.contains("secondary_window")
+            || rateLimit.keys.contains("secondaryWindow")
+        let hasMalformedWindow = rawAndParsed.contains { raw, parsed in
+            guard let raw, !(raw is NSNull) else { return false }
+            return parsed == nil
+        }
+        return ParsedRateLimitWindows(
+            windows: [primary, secondary].compactMap { $0 },
+            hasWindowFields: hasWindowFields,
+            hasMalformedWindow: hasMalformedWindow
+        )
+    }
+
+    private static func additionalRateLimitEntries(_ root: [String: Any]) -> [[String: Any]] {
+        let raw = value(root, keys: ["additional_rate_limits", "additionalRateLimits"])
+        if let entries = raw as? [[String: Any]] {
+            return entries
+        }
+        if let entries = raw as? [String: Any] {
+            return entries.values.compactMap { $0 as? [String: Any] }
+        }
+        return []
+    }
+
+    private static func isMonthlyWindow(_ window: RateWindow) -> Bool {
+        guard let minutes = window.windowDurationMins else { return false }
+        return (27 * 24 * 60...32 * 24 * 60).contains(minutes)
+    }
+
+    private static func isMonthlyLabel(_ label: String?) -> Bool {
+        guard let label = label?.lowercased() else { return false }
+        return label.contains("month") || label.contains("monthly") || label.contains("30d")
     }
 
     private static func parseWindow(

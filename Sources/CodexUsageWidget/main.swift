@@ -269,6 +269,7 @@ struct UsageSnapshot: Equatable {
     let quotaReadSucceeded: Bool
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let credits: CreditsInfo?
     let cloudLifetimeTokens: Int64?
     let local: LocalUsage?
@@ -284,6 +285,7 @@ struct UsageSnapshot: Equatable {
         quotaReadSucceeded: Bool,
         fiveHourQuota: RateWindow?,
         sevenDayQuota: RateWindow?,
+        monthlyQuota: RateWindow? = nil,
         credits: CreditsInfo?,
         cloudLifetimeTokens: Int64?,
         local: LocalUsage?,
@@ -298,6 +300,7 @@ struct UsageSnapshot: Equatable {
         self.quotaReadSucceeded = quotaReadSucceeded
         self.fiveHourQuota = fiveHourQuota
         self.sevenDayQuota = sevenDayQuota
+        self.monthlyQuota = monthlyQuota
         self.credits = credits
         self.cloudLifetimeTokens = cloudLifetimeTokens
         self.local = local
@@ -330,6 +333,7 @@ struct UsageSnapshot: Equatable {
             quotaReadSucceeded: quotaReadSucceeded,
             fiveHourQuota: fiveHourQuota,
             sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
             local: local,
@@ -342,6 +346,7 @@ struct UsageSnapshot: Equatable {
     func replacingQuotaWindows(
         fiveHourQuota: RateWindow?,
         sevenDayQuota: RateWindow?,
+        monthlyQuota: RateWindow? = nil,
         quotaReadSucceeded: Bool,
         cpaQuotaAccounts: [CPAQuotaAccount]? = nil
     ) -> UsageSnapshot {
@@ -353,6 +358,7 @@ struct UsageSnapshot: Equatable {
             quotaReadSucceeded: quotaReadSucceeded,
             fiveHourQuota: fiveHourQuota,
             sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota ?? self.monthlyQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
             local: local,
@@ -369,6 +375,7 @@ struct UsageSnapshot: Equatable {
         quotaReadSucceeded: Bool,
         fiveHourQuota: RateWindow?,
         sevenDayQuota: RateWindow?,
+        monthlyQuota: RateWindow?,
         cpaQuotaAccounts: [CPAQuotaAccount],
         additionalMessages: [String]
     ) -> UsageSnapshot {
@@ -380,6 +387,7 @@ struct UsageSnapshot: Equatable {
             quotaReadSucceeded: quotaReadSucceeded,
             fiveHourQuota: fiveHourQuota,
             sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota,
             credits: nil,
             cloudLifetimeTokens: nil,
             local: local,
@@ -8913,6 +8921,15 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
         ] as [String: Any]
     }
 
+    if let monthly = snapshot.monthlyQuota {
+        object["monthlyQuota"] = [
+            "usedPercent": monthly.usedPercent,
+            "remainingPercent": monthly.remainingPercent,
+            "windowDurationMins": jsonValue(monthly.windowDurationMins),
+            "resetsAt": jsonValue(isoString(monthly.resetsAt))
+        ] as [String: Any]
+    }
+
     if let credits = snapshot.credits {
         object["credits"] = [
             "hasCredits": credits.hasCredits,
@@ -8939,6 +8956,13 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
             }
             if let quota = account.sevenDayQuota {
                 accountObject["sevenDay"] = [
+                    "usedPercent": quota.usedPercent,
+                    "remainingPercent": quota.remainingPercent,
+                    "resetsAt": jsonValue(isoString(quota.resetsAt))
+                ] as [String: Any]
+            }
+            if let quota = account.monthlyQuota {
+                accountObject["monthly"] = [
                     "usedPercent": quota.usedPercent,
                     "remainingPercent": quota.remainingPercent,
                     "resetsAt": jsonValue(isoString(quota.resetsAt))

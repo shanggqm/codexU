@@ -80,6 +80,7 @@ struct CodexRuntimeProvider: RuntimeUsageProvider {
                 quotaReadSucceeded: cpaResult.quotaReadSucceeded,
                 fiveHourQuota: representative?.fiveHourQuota,
                 sevenDayQuota: representative?.sevenDayQuota,
+                monthlyQuota: representative?.monthlyQuota,
                 cpaQuotaAccounts: cpaResult.accounts,
                 additionalMessages: cpaResult.messages
             )

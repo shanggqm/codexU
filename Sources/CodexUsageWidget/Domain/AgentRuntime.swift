@@ -63,6 +63,8 @@ struct RuntimeMenuSummary: Identifiable, Equatable {
     let fiveHourResetsAt: Date?
     let sevenDayRemainingPercent: Double?
     let sevenDayResetsAt: Date?
+    let monthlyRemainingPercent: Double?
+    let monthlyResetsAt: Date?
     let todayTokens: Int64?
     let sourceLabel: String
 
@@ -95,6 +97,8 @@ struct RuntimeUsageSnapshot: Identifiable, Equatable {
             fiveHourResetsAt: snapshot.fiveHourQuota?.resetsAt,
             sevenDayRemainingPercent: snapshot.sevenDayQuota?.remainingPercent,
             sevenDayResetsAt: snapshot.sevenDayQuota?.resetsAt,
+            monthlyRemainingPercent: snapshot.monthlyQuota?.remainingPercent,
+            monthlyResetsAt: snapshot.monthlyQuota?.resetsAt,
             todayTokens: todayTokens,
             sourceLabel: quotaSourceLabel
         )
@@ -122,7 +126,9 @@ enum RuntimeQuotaContinuity {
             guard !next.snapshot.quotaReadSucceeded,
                   let last = previousByScope[next.scope],
                   last.status == .available || last.status == .stale,
-                  last.snapshot.fiveHourQuota != nil || last.snapshot.sevenDayQuota != nil
+                  last.snapshot.fiveHourQuota != nil
+                    || last.snapshot.sevenDayQuota != nil
+                    || last.snapshot.monthlyQuota != nil
             else {
                 return next
             }
@@ -132,6 +138,7 @@ enum RuntimeQuotaContinuity {
                 snapshot: next.snapshot.replacingQuotaWindows(
                     fiveHourQuota: last.snapshot.fiveHourQuota,
                     sevenDayQuota: last.snapshot.sevenDayQuota,
+                    monthlyQuota: last.snapshot.monthlyQuota,
                     quotaReadSucceeded: false,
                     cpaQuotaAccounts: last.snapshot.cpaQuotaAccounts.isEmpty
                         ? next.snapshot.cpaQuotaAccounts

@@ -107,14 +107,63 @@ enum CPAQuotaSelfTest {
         """
         do {
             let parsed = try CPAQuotaReader.parseQuotaBody(quotaBody, now: now)
-            expect(parsed.authoritative, "standard wham quota payload should be authoritative")
-            expect(parsed.fiveHour?.usedPercent == 25, "primary 5-hour quota should parse")
-            expect(parsed.fiveHour?.windowDurationMins == 300, "5-hour duration should be classified by seconds")
-            expect(parsed.fiveHour?.resetsAt == now.addingTimeInterval(600), "relative reset should use the refresh time")
-            expect(parsed.sevenDay?.usedPercent == 60, "secondary 7-day quota should parse")
+            expect(parsed.isAuthoritative, "standard wham quota payload should be authoritative")
+            expect(parsed.fiveHourQuota?.usedPercent == 25, "primary 5-hour quota should parse")
+            expect(parsed.fiveHourQuota?.windowDurationMins == 300, "5-hour duration should be classified by seconds")
+            expect(parsed.fiveHourQuota?.resetsAt == now.addingTimeInterval(600), "relative reset should use the refresh time")
+            expect(parsed.sevenDayQuota?.usedPercent == 60, "secondary 7-day quota should parse")
             expect(parsed.planType == "pro", "quota payload plan should override auth-file fallback")
         } catch {
             failures.append("standard wham quota payload should parse")
+        }
+
+        let monthlyQuotaBody = """
+        {
+          "plan_type": "team",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 72,
+              "limit_window_seconds": 2592000,
+              "reset_after_seconds": 864000
+            }
+          }
+        }
+        """
+        do {
+            let parsed = try CPAQuotaReader.parseQuotaBody(monthlyQuotaBody, now: now)
+            expect(parsed.isAuthoritative, "a monthly-only wham payload should be authoritative")
+            expect(parsed.fiveHourQuota == nil && parsed.sevenDayQuota == nil, "monthly quota must not be mislabeled as 5h or 7d")
+            expect(parsed.monthlyQuota?.usedPercent == 72, "30-day quota should parse as monthly")
+            expect(parsed.monthlyQuota?.windowDurationMins == 43_200, "30-day duration should be preserved")
+            expect(parsed.monthlyQuota?.resetsAt == now.addingTimeInterval(864_000), "monthly reset should use the response value")
+        } catch {
+            failures.append("monthly-only wham quota payload should parse")
+        }
+
+        let additionalMonthlyBody = """
+        {
+          "rate_limit": {
+            "primary_window": {"used_percent": 20, "limit_window_seconds": 18000},
+            "secondary_window": {"used_percent": 40, "limit_window_seconds": 604800}
+          },
+          "additional_rate_limits": [
+            {
+              "limit_name": "monthly-codex",
+              "rate_limit": {
+                "primary_window": {"used_percent": 65, "limit_window_seconds": 2678400}
+              }
+            }
+          ]
+        }
+        """
+        do {
+            let parsed = try CPAQuotaReader.parseQuotaBody(additionalMonthlyBody, now: now)
+            expect(parsed.isAuthoritative, "additional monthly quota should keep the payload authoritative")
+            expect(parsed.fiveHourQuota?.usedPercent == 20, "standard 5h quota should survive alongside monthly quota")
+            expect(parsed.sevenDayQuota?.usedPercent == 40, "standard 7d quota should survive alongside monthly quota")
+            expect(parsed.monthlyQuota?.usedPercent == 65, "31-day additional quota should parse as monthly")
+        } catch {
+            failures.append("additional monthly quota payload should parse")
         }
 
         let sessionConfiguration = URLSessionConfiguration.ephemeral
@@ -133,7 +182,8 @@ enum CPAQuotaSelfTest {
                 {
                   "files": [
                     {"provider":"codex","auth_index":"healthy","label":"Healthy"},
-                    {"provider":"codex","auth_index":"lowest","label":"Lowest"}
+                    {"provider":"codex","auth_index":"lowest","label":"Lowest"},
+                    {"provider":"codex","auth_index":"monthly","label":"Monthly"}
                   ]
                 }
                 """.utf8))
@@ -145,21 +195,30 @@ enum CPAQuotaSelfTest {
             else {
                 return (400, Data("{\"error\":\"bad request\"}".utf8))
             }
+            let isMonthly = authIndex == "monthly"
             let used = authIndex == "lowest" ? 90 : 20
+            let primaryWindow: [String: Any] = isMonthly
+                ? [
+                    "used_percent": 95,
+                    "limit_window_seconds": 2_592_000,
+                    "reset_after_seconds": 86_400
+                ]
+                : [
+                    "used_percent": used,
+                    "limit_window_seconds": 18_000,
+                    "reset_after_seconds": 300
+                ]
+            var rateLimit: [String: Any] = ["primary_window": primaryWindow]
+            if !isMonthly {
+                rateLimit["secondary_window"] = [
+                    "used_percent": authIndex == "lowest" ? 50 : 30,
+                    "limit_window_seconds": 604_800,
+                    "reset_after_seconds": 600
+                ]
+            }
             let quotaObject: [String: Any] = [
                 "plan_type": "plus",
-                "rate_limit": [
-                    "primary_window": [
-                        "used_percent": used,
-                        "limit_window_seconds": 18_000,
-                        "reset_after_seconds": 300
-                    ],
-                    "secondary_window": [
-                        "used_percent": authIndex == "lowest" ? 50 : 30,
-                        "limit_window_seconds": 604_800,
-                        "reset_after_seconds": 600
-                    ]
-                ]
+                "rate_limit": rateLimit
             ]
             let quotaData = try! JSONSerialization.data(withJSONObject: quotaObject)
             let envelope: [String: Any] = [
@@ -177,10 +236,10 @@ enum CPAQuotaSelfTest {
             ),
             now: now
         )
-        expect(pool.accounts.count == 2, "management API should return both Codex accounts")
+        expect(pool.accounts.count == 3, "management API should return every Codex account")
         expect(pool.accounts.allSatisfy { $0.status == .available }, "mock account quotas should be available")
-        expect(pool.representative?.displayName == "Lowest", "the lowest remaining account should drive the main quota")
-        expect(pool.representative?.fiveHourQuota?.remainingPercent == 10, "representative quota should keep the selected account windows")
+        expect(pool.representative?.displayName == "Monthly", "a low monthly-only account should drive the conservative pool signal")
+        expect(pool.representative?.monthlyQuota?.remainingPercent == 5, "representative quota should retain its monthly window")
         CPAQuotaMockURLProtocol.handler = nil
 
         if failures.isEmpty {

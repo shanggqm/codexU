@@ -61,6 +61,10 @@ private func runtimeLegacyJSONObject(_ snapshot: UsageSnapshot) -> [String: Any]
         object["secondary"] = runtimeJSONObject(secondary)
     }
 
+    if let monthly = snapshot.monthlyQuota {
+        object["monthlyQuota"] = runtimeJSONObject(monthly)
+    }
+
     if let credits = snapshot.credits {
         object["credits"] = [
             "hasCredits": credits.hasCredits,
@@ -83,6 +87,9 @@ private func runtimeLegacyJSONObject(_ snapshot: UsageSnapshot) -> [String: Any]
             }
             if let sevenDayQuota = account.sevenDayQuota {
                 accountObject["sevenDay"] = runtimeJSONObject(sevenDayQuota)
+            }
+            if let monthlyQuota = account.monthlyQuota {
+                accountObject["monthly"] = runtimeJSONObject(monthlyQuota)
             }
             return accountObject
         }

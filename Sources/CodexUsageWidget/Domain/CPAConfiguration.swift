@@ -155,10 +155,15 @@ struct CPAQuotaAccount: Identifiable, Equatable {
     let status: CPAQuotaAccountStatus
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let message: String?
 
     var lowestRemainingPercent: Double? {
-        [fiveHourQuota?.remainingPercent, sevenDayQuota?.remainingPercent]
+        [
+            fiveHourQuota?.remainingPercent,
+            sevenDayQuota?.remainingPercent,
+            monthlyQuota?.remainingPercent
+        ]
             .compactMap { $0 }
             .min()
     }
