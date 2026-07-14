@@ -274,6 +274,37 @@ struct UsageSnapshot: Equatable {
     let local: LocalUsage?
     let taskBoard: TaskBoard?
     let messages: [String]
+    let cpaQuotaAccounts: [CPAQuotaAccount]
+
+    init(
+        refreshedAt: Date,
+        account: AccountInfo?,
+        limitId: String?,
+        limitName: String?,
+        quotaReadSucceeded: Bool,
+        fiveHourQuota: RateWindow?,
+        sevenDayQuota: RateWindow?,
+        credits: CreditsInfo?,
+        cloudLifetimeTokens: Int64?,
+        local: LocalUsage?,
+        taskBoard: TaskBoard?,
+        messages: [String],
+        cpaQuotaAccounts: [CPAQuotaAccount] = []
+    ) {
+        self.refreshedAt = refreshedAt
+        self.account = account
+        self.limitId = limitId
+        self.limitName = limitName
+        self.quotaReadSucceeded = quotaReadSucceeded
+        self.fiveHourQuota = fiveHourQuota
+        self.sevenDayQuota = sevenDayQuota
+        self.credits = credits
+        self.cloudLifetimeTokens = cloudLifetimeTokens
+        self.local = local
+        self.taskBoard = taskBoard
+        self.messages = messages
+        self.cpaQuotaAccounts = cpaQuotaAccounts
+    }
 
     static let empty = UsageSnapshot(
         refreshedAt: Date(),
@@ -303,7 +334,8 @@ struct UsageSnapshot: Equatable {
             cloudLifetimeTokens: cloudLifetimeTokens,
             local: local,
             taskBoard: taskBoard,
-            messages: messages
+            messages: messages,
+            cpaQuotaAccounts: cpaQuotaAccounts
         )
     }
 
@@ -324,7 +356,35 @@ struct UsageSnapshot: Equatable {
             cloudLifetimeTokens: cloudLifetimeTokens,
             local: local,
             taskBoard: taskBoard,
-            messages: messages
+            messages: messages,
+            cpaQuotaAccounts: cpaQuotaAccounts
+        )
+    }
+
+    func replacingAccountQuota(
+        account: AccountInfo?,
+        limitId: String?,
+        limitName: String?,
+        quotaReadSucceeded: Bool,
+        fiveHourQuota: RateWindow?,
+        sevenDayQuota: RateWindow?,
+        cpaQuotaAccounts: [CPAQuotaAccount],
+        additionalMessages: [String]
+    ) -> UsageSnapshot {
+        UsageSnapshot(
+            refreshedAt: refreshedAt,
+            account: account,
+            limitId: limitId,
+            limitName: limitName,
+            quotaReadSucceeded: quotaReadSucceeded,
+            fiveHourQuota: fiveHourQuota,
+            sevenDayQuota: sevenDayQuota,
+            credits: nil,
+            cloudLifetimeTokens: nil,
+            local: local,
+            taskBoard: taskBoard,
+            messages: messages + additionalMessages,
+            cpaQuotaAccounts: cpaQuotaAccounts
         )
     }
 }
@@ -964,6 +1024,26 @@ final class CodexUsageReader {
             sevenDayQuota: appServer.sevenDayQuota,
             credits: appServer.credits,
             cloudLifetimeTokens: appServer.cloudLifetimeTokens,
+            local: local,
+            taskBoard: taskBoard,
+            messages: messages
+        )
+    }
+
+    func loadLocal(context: RuntimeLoadContext) -> UsageSnapshot {
+        var messages: [String] = []
+        let local = readLocalUsage(context: context, messages: &messages)
+        let taskBoard = readTaskBoard(context: context, messages: &messages)
+        return UsageSnapshot(
+            refreshedAt: context.now,
+            account: nil,
+            limitId: nil,
+            limitName: nil,
+            quotaReadSucceeded: false,
+            fiveHourQuota: nil,
+            sevenDayQuota: nil,
+            credits: nil,
+            cloudLifetimeTokens: nil,
             local: local,
             taskBoard: taskBoard,
             messages: messages
@@ -8640,6 +8720,32 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
             "balance": jsonValue(credits.balance),
             "resetCredits": jsonValue(credits.resetCredits)
         ] as [String: Any]
+    }
+
+    if !snapshot.cpaQuotaAccounts.isEmpty {
+        object["cpaAccounts"] = snapshot.cpaQuotaAccounts.map { account in
+            var accountObject: [String: Any] = [
+                "displayName": account.displayName,
+                "planType": jsonValue(account.planType),
+                "status": account.status.rawValue,
+                "message": jsonValue(account.message)
+            ]
+            if let quota = account.fiveHourQuota {
+                accountObject["fiveHour"] = [
+                    "usedPercent": quota.usedPercent,
+                    "remainingPercent": quota.remainingPercent,
+                    "resetsAt": jsonValue(isoString(quota.resetsAt))
+                ] as [String: Any]
+            }
+            if let quota = account.sevenDayQuota {
+                accountObject["sevenDay"] = [
+                    "usedPercent": quota.usedPercent,
+                    "remainingPercent": quota.remainingPercent,
+                    "resetsAt": jsonValue(isoString(quota.resetsAt))
+                ] as [String: Any]
+            }
+            return accountObject
+        }
     }
 
     if let local = snapshot.local {
