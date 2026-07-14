@@ -16,7 +16,7 @@ struct RuntimeSelector: View {
                     HStack(spacing: 5) {
                         RuntimeLogoView(scope: scope, size: 15)
                         Text(label(for: scope))
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(WidgetTypography.font(size: 11, weight: .semibold))
                             .lineLimit(1)
                             .minimumScaleFactor(0.82)
                     }
@@ -86,6 +86,7 @@ struct RuntimeStatusMenuView: View {
         }
         .padding(14)
         .frame(width: 380, height: runtimeStatusPopoverHeight(for: displayedScopes.count), alignment: .top)
+        .environment(\.font, WidgetTypography.font(size: NSFont.systemFontSize))
     }
 
     private var header: some View {
@@ -98,9 +99,9 @@ struct RuntimeStatusMenuView: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text("codexU")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(WidgetTypography.font(size: 14, weight: .semibold))
                 Text("\(language.text("刷新", "Refreshed")) \(runtimeTimeOnly(store.snapshot.refreshedAt))")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(WidgetTypography.font(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -108,7 +109,7 @@ struct RuntimeStatusMenuView: View {
                 store.refresh()
             } label: {
                 Image(systemName: store.isRefreshing ? "hourglass" : "arrow.clockwise")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(WidgetTypography.font(size: 12, weight: .semibold))
                     .frame(width: 26, height: 24)
             }
             .buttonStyle(.plain)
@@ -120,14 +121,14 @@ struct RuntimeStatusMenuView: View {
     private var totalRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "sum")
-                .font(.system(size: 12, weight: .semibold))
+                .font(WidgetTypography.font(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 18)
             Text(language.text("今日总 token", "Total tokens today"))
-                .font(.system(size: 11, weight: .semibold))
+                .font(WidgetTypography.font(size: 11, weight: .semibold))
             Spacer()
             Text(TokenFormatter.format(store.totalTodayTokens(for: displayedScopes)))
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .font(WidgetTypography.font(size: 13, weight: .bold, design: .rounded))
                 .monospacedDigit()
         }
         .padding(.horizontal, 10)
@@ -165,7 +166,7 @@ struct RuntimeStatusMenuView: View {
     private func menuCommandButton(title: String, systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: systemName)
-                .font(.system(size: 11, weight: .semibold))
+                .font(WidgetTypography.font(size: 11, weight: .semibold))
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, minHeight: 32)
                 .background(
@@ -208,11 +209,11 @@ struct RuntimeSummaryCard: View {
                 HStack(alignment: .center, spacing: 8) {
                     RuntimeLogoView(scope: summary.scope, size: 24)
                     Text(summary.displayName)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(WidgetTypography.font(size: 15, weight: .semibold))
                         .foregroundStyle(.primary)
                     Spacer()
                     Text(summary.status.localized(language))
-                        .font(.system(size: 10, weight: .bold))
+                        .font(WidgetTypography.font(size: 10, weight: .bold))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
                         .background(
@@ -235,17 +236,17 @@ struct RuntimeSummaryCard: View {
                     )
                     VStack(alignment: .leading, spacing: 3) {
                         Text(language.text("今日 token", "Today"))
-                            .font(.system(size: 9, weight: .medium))
+                            .font(WidgetTypography.font(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
                         Text(TokenFormatter.format(summary.todayTokens))
-                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .font(WidgetTypography.font(size: 15, weight: .bold, design: .rounded))
                             .monospacedDigit()
                     }
                     .frame(width: 82, alignment: .leading)
                 }
 
                 Text(localizedSourceLabel)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(WidgetTypography.font(size: 9, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -270,10 +271,10 @@ struct RuntimeSummaryCard: View {
     private func quotaColumn(title: String, value: Double?, resetsAt: Date?) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 9, weight: .medium))
+                .font(WidgetTypography.font(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
             Text(runtimeFormatPercent(value))
-                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .font(WidgetTypography.font(size: 15, weight: .bold, design: .rounded))
                 .monospacedDigit()
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
@@ -286,7 +287,7 @@ struct RuntimeSummaryCard: View {
             }
             .frame(height: 4)
             Text(resetsAt.map { runtimeTimeOnly($0) } ?? "--")
-                .font(.system(size: 8, weight: .medium))
+                .font(WidgetTypography.font(size: 8, weight: .medium))
                 .foregroundStyle(.tertiary)
         }
         .frame(width: 86, alignment: .leading)

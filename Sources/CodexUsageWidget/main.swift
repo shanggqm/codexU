@@ -2746,6 +2746,73 @@ enum WidgetThemeMode: String, CaseIterable, Equatable {
     }
 }
 
+enum WidgetTypography {
+    static let cjkFontFamily = "Noto Serif CJK SC"
+    static let latinFontFallbacks = [
+        "Fira Code",
+        "Fira Mono",
+        "Menlo",
+        "Consolas",
+        "DejaVu Sans Mono"
+    ]
+
+    private static let availableFontFamilies = Set(NSFontManager.shared.availableFontFamilies)
+    private static let availableLatinFontFamily = latinFontFallbacks.first {
+        availableFontFamilies.contains($0)
+    }
+
+    static func font(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        design: Font.Design = .default
+    ) -> Font {
+        guard WidgetThemeMode.storedOrAutomatic() == .absolutely else {
+            return .system(size: size, weight: weight, design: design)
+        }
+
+        guard let availableLatinFontFamily else {
+            return .system(size: size, weight: weight, design: .monospaced)
+        }
+
+        let appKitWeight = appKitWeight(weight)
+        let traits: [NSFontDescriptor.TraitKey: Any] = [
+            .weight: appKitWeight.rawValue
+        ]
+        var attributes: [NSFontDescriptor.AttributeName: Any] = [
+            .family: availableLatinFontFamily,
+            .traits: traits
+        ]
+        if availableFontFamilies.contains(cjkFontFamily) {
+            attributes[.cascadeList] = [
+                NSFontDescriptor(fontAttributes: [
+                    .family: cjkFontFamily,
+                    .traits: traits
+                ])
+            ]
+        }
+
+        guard let font = NSFont(
+            descriptor: NSFontDescriptor(fontAttributes: attributes),
+            size: size
+        ) else {
+            return .system(size: size, weight: weight, design: .monospaced)
+        }
+        return Font(font)
+    }
+
+    private static func appKitWeight(_ weight: Font.Weight) -> NSFont.Weight {
+        if weight == .ultraLight { return .ultraLight }
+        if weight == .thin { return .thin }
+        if weight == .light { return .light }
+        if weight == .medium { return .medium }
+        if weight == .semibold { return .semibold }
+        if weight == .bold { return .bold }
+        if weight == .heavy { return .heavy }
+        if weight == .black { return .black }
+        return .regular
+    }
+}
+
 final class AppSettings: ObservableObject {
     private static let keepMainWindowOnTopKey = "codexU.keepMainWindowOnTop"
     private static let keepRunningWhenMainWindowClosedKey = "codexU.keepRunningWhenMainWindowClosed"
@@ -3000,6 +3067,7 @@ struct UsageWidgetView: View {
         }
         .frame(width: Self.widgetWidth, alignment: .topLeading)
         .frame(minHeight: Self.widgetMinHeight, maxHeight: .infinity, alignment: .topLeading)
+        .environment(\.font, WidgetTypography.font(size: NSFont.systemFontSize))
         .environment(\.colorScheme, effectiveColorScheme)
         .preferredColorScheme(themeMode.preferredColorScheme)
         .onAppear {
@@ -3054,14 +3122,14 @@ struct UsageWidgetView: View {
             ForEach(environmentDiagnostics) { item in
                 HStack(alignment: .top, spacing: 9) {
                     Image(systemName: item.systemName)
-                        .font(.system(size: 12, weight: .bold))
+                        .font(WidgetTypography.font(size: 12, weight: .bold))
                         .foregroundStyle(item.tint)
                         .frame(width: 18, height: 18)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.title)
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(WidgetTypography.font(size: 11, weight: .semibold))
                         Text(item.detail)
-                            .font(.system(size: 10, weight: .medium))
+                            .font(WidgetTypography.font(size: 10, weight: .medium))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -3075,7 +3143,7 @@ struct UsageWidgetView: View {
 
     private func statusPill(_ label: String) -> some View {
         Text(label)
-            .font(.system(size: 11, weight: .semibold))
+            .font(WidgetTypography.font(size: 11, weight: .semibold))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
@@ -3149,7 +3217,7 @@ struct UsageWidgetView: View {
                 }
                 Spacer(minLength: 10)
                 Text(dashboardSummary)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(WidgetTypography.font(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
@@ -3200,11 +3268,11 @@ struct UsageWidgetView: View {
             AppUpdateFooterButton(updateStore: updateStore, language: language)
             Spacer()
             Text("\(language.text("刷新", "Refreshed")) \(timeOnly(snapshot.refreshedAt, language: language))")
-                .font(.system(size: 10, weight: .medium))
+                .font(WidgetTypography.font(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
             if let shortcut = settings.globalShortcut {
                 Text(shortcut.displayName)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(WidgetTypography.font(size: 10, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
         }
@@ -3379,10 +3447,10 @@ struct SectionTitle: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
-                .font(.system(size: 12, weight: .semibold))
+                .font(WidgetTypography.font(size: 12, weight: .semibold))
             Spacer()
             Text(detail)
-                .font(.system(size: 10, weight: .medium))
+                .font(WidgetTypography.font(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
         }
     }
@@ -3470,7 +3538,7 @@ struct HeaderActionButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .semibold))
+                .font(WidgetTypography.font(size: 12, weight: .semibold))
                 .foregroundStyle(foregroundColor)
                 .frame(width: titlebarControlHeight, height: titlebarControlHeight)
                 .background(
@@ -3551,6 +3619,7 @@ struct TitlebarToolbarView: View {
         .padding(.bottom, 2)
         .padding(.trailing, 18)
         .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44, alignment: .topTrailing)
+        .environment(\.font, WidgetTypography.font(size: NSFont.systemFontSize))
         .environment(\.colorScheme, effectiveColorScheme)
         .preferredColorScheme(themeMode.preferredColorScheme)
     }
@@ -3753,6 +3822,7 @@ struct SettingsPanelView: View {
         .padding(20)
         .frame(width: 480, alignment: .topLeading)
         .background(WidgetPalette.sectionFill(colorScheme).opacity(0.35))
+        .environment(\.font, WidgetTypography.font(size: NSFont.systemFontSize))
     }
 
     private var statisticsTimeZoneSelectionBinding: Binding<StatisticsTimeZoneSelection> {
@@ -3805,9 +3875,9 @@ struct SettingsPanelView: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(language.text("设置", "Settings"))
-                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .font(WidgetTypography.font(size: 18, weight: .semibold, design: .rounded))
                 Text("codexU")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(WidgetTypography.font(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -3878,7 +3948,7 @@ struct SettingsSegmentedControl<Value: Hashable>: View {
                     selection = option.value
                 } label: {
                     Text(option.title)
-                        .font(.system(size: 12, weight: selection == option.value ? .semibold : .medium))
+                        .font(WidgetTypography.font(size: 12, weight: selection == option.value ? .semibold : .medium))
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
                         .foregroundStyle(selection == option.value ? Color.white : Color.secondary)
@@ -3929,7 +3999,7 @@ struct SettingsRuntimeMultiSelectControl: View {
                     HStack(spacing: 6) {
                         RuntimeLogoView(scope: scope, size: 16)
                         Text(label(for: scope))
-                            .font(.system(size: 12, weight: isSelected(scope) ? .semibold : .medium))
+                            .font(WidgetTypography.font(size: 12, weight: isSelected(scope) ? .semibold : .medium))
                             .lineLimit(1)
                             .minimumScaleFactor(0.82)
                     }
@@ -4023,7 +4093,7 @@ struct SettingsValueRow: View {
     var body: some View {
         SettingsBaseRow(title: title, detail: detail) {
             Text(value)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .font(WidgetTypography.font(size: 12, weight: .semibold, design: .rounded))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -4040,21 +4110,21 @@ struct SettingsErrorRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .font(WidgetTypography.font(size: 14, weight: .semibold))
                 .foregroundStyle(WidgetPalette.statusDanger)
                 .frame(width: 18, height: 18)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(WidgetTypography.font(size: 12, weight: .semibold))
                     .foregroundStyle(WidgetPalette.statusDanger)
                 Text(message)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(WidgetTypography.font(size: 10, weight: .medium))
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(currentValue)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .font(WidgetTypography.font(size: 10, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -4091,10 +4161,10 @@ struct SettingsBaseRow<Accessory: View>: View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(WidgetTypography.font(size: 12, weight: .semibold))
                     .foregroundStyle(.primary)
                 Text(detail)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(WidgetTypography.font(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -4123,10 +4193,10 @@ struct DashboardTabSwitch: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: dashboardTabIcon(tab))
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(WidgetTypography.font(size: 10, weight: .semibold))
                             .frame(width: dashboardTabIconWidth, alignment: .center)
                         Text(localizedDashboardTabLabel(tab, language: language))
-                            .font(.system(size: 12, weight: selectedTab == tab ? .semibold : .medium))
+                            .font(WidgetTypography.font(size: 12, weight: selectedTab == tab ? .semibold : .medium))
                             .lineLimit(1)
                             .minimumScaleFactor(0.82)
                     }
@@ -4303,7 +4373,7 @@ struct DualQuotaRing: View {
                     color: quotaSecondaryColor
                 )
                 Text(language.text("剩余", "left"))
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(WidgetTypography.font(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
         }
@@ -4720,10 +4790,10 @@ struct QuotaRingLabel: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
             Text(title)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(WidgetTypography.font(size: 10, weight: .bold, design: .rounded))
                 .foregroundStyle(color)
             Text(value)
-                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .font(WidgetTypography.font(size: 16, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.primary)
         }
@@ -4765,15 +4835,15 @@ struct QuotaResetLine: View {
                 .fill(color)
                 .frame(width: 5, height: 5)
             Text(title)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .font(WidgetTypography.font(size: 9, weight: .bold, design: .rounded))
                 .foregroundStyle(color)
                 .monospacedDigit()
             Text(language.text("重置", "resets"))
-                .font(.system(size: 9, weight: .medium))
+                .font(WidgetTypography.font(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
             Spacer(minLength: 4)
             Text(resetText)
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .font(WidgetTypography.font(size: 9, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -4819,7 +4889,7 @@ struct DailyTokenBar: View {
     var body: some View {
         VStack(spacing: 5) {
             Text(formatTokens(bucket.tokens))
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .font(WidgetTypography.font(size: 9, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -4833,7 +4903,7 @@ struct DailyTokenBar: View {
                     .frame(height: barHeight)
             }
             Text(localizedDayLabel(bucket.label, language: language))
-                .font(.system(size: 9, weight: .medium))
+                .font(WidgetTypography.font(size: 9, weight: .medium))
                 .foregroundStyle(bucket.label == "今天" ? .primary : .secondary)
                 .lineLimit(1)
         }
@@ -4856,7 +4926,7 @@ struct DetailedTokenMetricCard: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: systemName)
-                    .font(.system(size: 10, weight: .bold))
+                    .font(WidgetTypography.font(size: 10, weight: .bold))
                     .foregroundStyle(.secondary)
                     .frame(width: 18, height: 18)
                     .background(
@@ -4864,12 +4934,12 @@ struct DetailedTokenMetricCard: View {
                             .fill(WidgetPalette.surfaceTrack)
                     )
                 Text(title)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(WidgetTypography.font(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Text(formatUSD(usage?.estimatedCostUSD))
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(WidgetTypography.font(size: 10, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -4878,7 +4948,7 @@ struct DetailedTokenMetricCard: View {
             .frame(height: dashboardCardHeaderHeight, alignment: .center)
 
             Text(formatTokens(displayTokens))
-                .font(.system(size: 21, weight: .bold, design: .rounded))
+                .font(WidgetTypography.font(size: 21, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -4955,12 +5025,12 @@ struct TokenSplitLegendRow: View {
                 .fill(color)
                 .frame(width: 6, height: 6)
             Text(title)
-                .font(.system(size: 9, weight: .medium))
+                .font(WidgetTypography.font(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer(minLength: 4)
             Text(formatTokens(value))
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .font(WidgetTypography.font(size: 9, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -4976,11 +5046,13 @@ private struct SubscriptionMilestone: Identifiable {
     let color: Color
 }
 
-private let subscriptionMilestones: [SubscriptionMilestone] = [
-    SubscriptionMilestone(id: "plus", title: "Plus", amountUSD: 20, color: WidgetPalette.statusInfo),
-    SubscriptionMilestone(id: "pro100", title: "Pro100", amountUSD: 100, color: WidgetPalette.brandSecondary),
-    SubscriptionMilestone(id: "pro200", title: "Pro200", amountUSD: 200, color: WidgetPalette.brandPrimaryLight)
-]
+private var subscriptionMilestones: [SubscriptionMilestone] {
+    [
+        SubscriptionMilestone(id: "plus", title: "Plus", amountUSD: 20, color: WidgetPalette.dataUncachedInput),
+        SubscriptionMilestone(id: "pro100", title: "Pro100", amountUSD: 100, color: WidgetPalette.dataCachedInput),
+        SubscriptionMilestone(id: "pro200", title: "Pro200", amountUSD: 200, color: WidgetPalette.dataOutputToken)
+    ]
+}
 
 // Used only for the full-quota monthly ceiling. Actual usage still uses per-session model prices and token splits.
 private let quotaValueDailyTokenLimit: Double = 200_000_000
@@ -5009,26 +5081,26 @@ struct WoolProgressCard: View {
     }
 
     private var accent: Color {
-        if cost >= 200 { return WidgetPalette.brandPrimaryLight }
-        if cost >= 100 { return WidgetPalette.brandSecondary }
-        if cost >= 20 { return WidgetPalette.statusInfo }
-        return WidgetPalette.statusWarning
+        if cost >= 200 { return WidgetPalette.dataOutputToken }
+        if cost >= 100 { return WidgetPalette.dataCachedInput }
+        if cost >= 20 { return WidgetPalette.dataUncachedInput }
+        return WidgetPalette.brandPrimary
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: cost >= 20 ? "chart.line.uptrend.xyaxis" : "target")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(WidgetTypography.font(size: 12, weight: .bold))
                     .foregroundStyle(accent)
                 Text(language.text("羊毛进度", "Value progress"))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(WidgetTypography.font(size: 12, weight: .semibold))
                 Spacer(minLength: 8)
                 Text(formatUSD(usage?.estimatedCostUSD))
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .font(WidgetTypography.font(size: 16, weight: .bold, design: .rounded))
                     .monospacedDigit()
                 Text("/ \(formatCompactUSD(maxValue))")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(WidgetTypography.font(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
             .frame(height: dashboardCardHeaderHeight, alignment: .center)
@@ -5046,14 +5118,14 @@ struct WoolProgressCard: View {
                             .fill(milestone.color)
                             .frame(width: 5, height: 5)
                         Text(milestone.title)
-                            .font(.system(size: 8.5, weight: .semibold, design: .rounded))
+                            .font(WidgetTypography.font(size: 8.5, weight: .semibold, design: .rounded))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                 }
                 Spacer(minLength: 4)
                 Text("\(language.text("满额", "Cap")) \(formatCompactUSD(maxValue))")
-                    .font(.system(size: 8.5, weight: .bold, design: .rounded))
+                    .font(WidgetTypography.font(size: 8.5, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -5151,17 +5223,17 @@ struct TokenMetricCard: View {
                     .fill(tint)
                     .frame(width: 7, height: 7)
                 Text(title)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(WidgetTypography.font(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Text(value)
-                .font(.system(size: 21, weight: .bold, design: .rounded))
+                .font(WidgetTypography.font(size: 21, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
             Text(language.text("Tokens", "Tokens"))
-                .font(.system(size: 10, weight: .medium))
+                .font(WidgetTypography.font(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
         }
         .padding(dashboardCardPadding)
@@ -5181,7 +5253,7 @@ struct MiniTrendCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(language.text("近 7 天使用趋势", "7-day trend"))
-                .font(.system(size: 11, weight: .semibold))
+                .font(WidgetTypography.font(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
@@ -5203,7 +5275,7 @@ struct MiniTrendCard: View {
                 Spacer()
                 Text(language.text("今", "Now"))
             }
-            .font(.system(size: 9, weight: .medium))
+            .font(WidgetTypography.font(size: 9, weight: .medium))
             .foregroundStyle(.secondary)
         }
         .padding(dashboardCardPadding)
@@ -5236,19 +5308,19 @@ struct ChartTooltipView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(payload.title)
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(WidgetTypography.font(size: 10.5, weight: .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
             VStack(spacing: 4) {
                 ForEach(payload.rows) { row in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(row.label)
-                            .font(.system(size: 9, weight: .medium))
+                            .font(WidgetTypography.font(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         Spacer(minLength: 8)
                         Text(row.value)
-                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .font(WidgetTypography.font(size: 9, weight: .semibold, design: .rounded))
                             .monospacedDigit()
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -5408,7 +5480,7 @@ struct UsageHeatmapCard: View {
                 HStack(spacing: 6) {
                     Spacer()
                     Text(language.text("少", "Less"))
-                        .font(.system(size: 9, weight: .medium))
+                        .font(WidgetTypography.font(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
                     ForEach(0..<5, id: \.self) { level in
                         RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -5416,7 +5488,7 @@ struct UsageHeatmapCard: View {
                             .frame(width: heatmapCellSize, height: heatmapCellSize)
                     }
                     Text(language.text("多", "More"))
-                        .font(.system(size: 9, weight: .medium))
+                        .font(WidgetTypography.font(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
                 .padding(.top, 4)
@@ -5478,7 +5550,7 @@ struct UsageHeatmapView: View {
                 ZStack(alignment: .topLeading) {
                     ForEach(monthMarkers) { marker in
                         Text(marker.title)
-                            .font(.system(size: 9, weight: .medium))
+                            .font(WidgetTypography.font(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
@@ -5495,7 +5567,7 @@ struct UsageHeatmapView: View {
                 VStack(alignment: .trailing, spacing: cellSpacing) {
                     ForEach(0..<7, id: \.self) { index in
                         Text(weekdayLabel(index))
-                            .font(.system(size: 8.5, weight: .medium))
+                            .font(WidgetTypography.font(size: 8.5, weight: .medium))
                             .foregroundStyle(.secondary)
                             .frame(width: weekdayLabelWidth, height: cellSize, alignment: .trailing)
                     }
@@ -5644,7 +5716,7 @@ struct UsageSevenDaySummaryCard: View {
                     systemName: "chart.xyaxis.line"
                 ) {
                     Text(changeText)
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .font(WidgetTypography.font(size: 9, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(changeTint)
                         .lineLimit(1)
@@ -5657,15 +5729,15 @@ struct UsageSevenDaySummaryCard: View {
 
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(formatTokens(trend.summary.sevenDay.tokens.visibleTotalTokens))
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .font(WidgetTypography.font(size: 16, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .lineLimit(1)
                     Text(language.text("总量", "total"))
-                        .font(.system(size: 9, weight: .medium))
+                        .font(WidgetTypography.font(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
                     Spacer()
                     Text(language.text("日均 \(formatTokens(trend.summary.dailyAverageTokens))", "avg \(formatTokens(trend.summary.dailyAverageTokens))"))
-                        .font(.system(size: 9, weight: .medium))
+                        .font(WidgetTypography.font(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -5769,7 +5841,7 @@ struct SevenDayLineChart: View {
             HStack(spacing: 0) {
                 ForEach(buckets) { bucket in
                     Text(shortWeekdayText(bucket.date, language: language))
-                        .font(.system(size: 8, weight: .medium))
+                        .font(WidgetTypography.font(size: 8, weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                         .lineLimit(1)
@@ -5974,7 +6046,7 @@ struct ProjectActivityOverview: View {
 
                         VStack(alignment: .leading, spacing: 5) {
                             Text(language.text("最近活跃", "Recent activity"))
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(WidgetTypography.font(size: 10, weight: .semibold))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
 
@@ -6003,7 +6075,7 @@ struct ProjectActivityRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: 7) {
             Image(systemName: "folder.fill")
-                .font(.system(size: 8.5, weight: .semibold))
+                .font(WidgetTypography.font(size: 8.5, weight: .semibold))
                 .foregroundStyle(WidgetPalette.brandSecondary)
                 .frame(width: 18, height: 18)
                 .background(
@@ -6013,10 +6085,10 @@ struct ProjectActivityRow: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(project.name)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(WidgetTypography.font(size: 10, weight: .semibold))
                     .lineLimit(1)
                 Text(projectDetail)
-                    .font(.system(size: 8.5, weight: .medium))
+                    .font(WidgetTypography.font(size: 8.5, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -6024,7 +6096,7 @@ struct ProjectActivityRow: View {
             Spacer(minLength: 6)
 
             Text(formatTokens(project.tokens))
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(WidgetTypography.font(size: 10, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -6078,20 +6150,20 @@ struct ProjectUsageRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(project.name)
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .font(WidgetTypography.font(size: 10.5, weight: .semibold))
                         .lineLimit(1)
                     Text(projectDetail)
-                        .font(.system(size: 8.5, weight: .medium))
+                        .font(WidgetTypography.font(size: 8.5, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 6)
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(formatTokens(project.tokens))
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .font(WidgetTypography.font(size: 11, weight: .bold, design: .rounded))
                         .monospacedDigit()
                     Text(projectSecondaryValue)
-                        .font(.system(size: 8.5, weight: .medium))
+                        .font(WidgetTypography.font(size: 8.5, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -6185,7 +6257,7 @@ struct ToolUsageRow: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 7) {
                 Image(systemName: toolCategoryIcon(tool.category))
-                    .font(.system(size: 9, weight: .bold))
+                    .font(WidgetTypography.font(size: 9, weight: .bold))
                     .foregroundStyle(WidgetPalette.brandPrimary)
                     .frame(width: 18, height: 18)
                     .background(
@@ -6194,19 +6266,19 @@ struct ToolUsageRow: View {
                     )
                 VStack(alignment: .leading, spacing: 1) {
                     Text(tool.name)
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .font(WidgetTypography.font(size: 10, weight: .semibold, design: .rounded))
                         .lineLimit(1)
                     Text(localizedToolCategory(tool.category, language: language))
-                        .font(.system(size: 8.5, weight: .medium))
+                        .font(WidgetTypography.font(size: 8.5, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 6)
                 VStack(alignment: .trailing, spacing: 1) {
                     Text(language.text("\(tool.callCount) 次", "\(tool.callCount)x"))
-                        .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                        .font(WidgetTypography.font(size: 10.5, weight: .bold, design: .rounded))
                         .monospacedDigit()
                     Text(tool.estimatedTokens.map { language.text("估算 \(formatTokens($0))", "est. \(formatTokens($0))") } ?? "--")
-                        .font(.system(size: 8.5, weight: .medium))
+                        .font(WidgetTypography.font(size: 8.5, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -6312,7 +6384,7 @@ struct SkillUsageRow: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 7) {
                 Image(systemName: "puzzlepiece.extension.fill")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(WidgetTypography.font(size: 9, weight: .bold))
                     .foregroundStyle(WidgetPalette.brandSecondary)
                     .frame(width: 18, height: 18)
                     .background(
@@ -6321,20 +6393,20 @@ struct SkillUsageRow: View {
                     )
                 VStack(alignment: .leading, spacing: 1) {
                     Text(skill.name)
-                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .font(WidgetTypography.font(size: 10.5, weight: .semibold, design: .rounded))
                         .lineLimit(1)
                     Text(skillDetail)
-                        .font(.system(size: 8.5, weight: .medium))
+                        .font(WidgetTypography.font(size: 8.5, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 6)
                 VStack(alignment: .trailing, spacing: 1) {
                     Text(language.text("\(skill.loadCount) 次", "\(skill.loadCount)x"))
-                        .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                        .font(WidgetTypography.font(size: 10.5, weight: .bold, design: .rounded))
                         .monospacedDigit()
                     Text(staticTokenText)
-                        .font(.system(size: 8.5, weight: .medium))
+                        .font(WidgetTypography.font(size: 8.5, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -6392,14 +6464,14 @@ struct AnalyticsEmptyState: View {
     var body: some View {
         VStack(spacing: 7) {
             Image(systemName: systemName)
-                .font(.system(size: 17, weight: .semibold))
+                .font(WidgetTypography.font(size: 17, weight: .semibold))
                 .foregroundStyle(.tertiary)
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(WidgetTypography.font(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Text(detail)
-                .font(.system(size: 9, weight: .medium))
+                .font(WidgetTypography.font(size: 9, weight: .medium))
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -6442,11 +6514,11 @@ struct DashboardCardHeader<Trailing: View>: View {
     var body: some View {
         HStack(alignment: .center, spacing: dashboardCardHeaderSpacing) {
             Image(systemName: systemName)
-                .font(.system(size: dashboardCardIconSize, weight: .semibold))
+                .font(WidgetTypography.font(size: dashboardCardIconSize, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: dashboardCardIconFrame, height: dashboardCardHeaderHeight)
             Text(title)
-                .font(.system(size: dashboardCardTitleSize, weight: .semibold))
+                .font(WidgetTypography.font(size: dashboardCardTitleSize, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer(minLength: dashboardCardHeaderSpacing)
@@ -6464,18 +6536,18 @@ struct TaskBoardColumnView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: taskColumnIcon(column.id))
-                    .font(.system(size: 10, weight: .bold))
+                    .font(WidgetTypography.font(size: 10, weight: .bold))
                     .foregroundStyle(taskAccentColor(column.id))
                 Text(localizedTaskColumnTitle(column.id, language: language))
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(WidgetTypography.font(size: 11, weight: .semibold))
                     .lineLimit(1)
                 Text("\(column.count)")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .font(WidgetTypography.font(size: 10, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 4)
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(WidgetTypography.font(size: 10, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
             .frame(height: dashboardCardHeaderHeight, alignment: .center)
@@ -6483,10 +6555,10 @@ struct TaskBoardColumnView: View {
             if column.items.isEmpty {
                 VStack(spacing: 5) {
                     Image(systemName: "circle.dashed")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(WidgetTypography.font(size: 13, weight: .semibold))
                         .foregroundStyle(.tertiary)
                     Text(language.text("暂无", "No items"))
-                        .font(.system(size: 10, weight: .medium))
+                        .font(WidgetTypography.font(size: 10, weight: .medium))
                         .foregroundStyle(.tertiary)
                 }
                 .frame(maxWidth: .infinity)
@@ -6497,7 +6569,7 @@ struct TaskBoardColumnView: View {
                 }
                 if column.count > column.items.count {
                     Text(language.text("+ \(column.count - column.items.count) 项", "+ \(column.count - column.items.count) more"))
-                        .font(.system(size: 10, weight: .medium))
+                        .font(WidgetTypography.font(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                         .padding(.top, 2)
                         .padding(.leading, 6)
@@ -6525,27 +6597,27 @@ struct TaskIssueCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(item.code)
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .font(WidgetTypography.font(size: 9, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 4)
                 if let updatedAt = item.updatedAt {
                     Text(relativeTimeText(updatedAt, language: language))
-                        .font(.system(size: 8, weight: .medium))
+                        .font(WidgetTypography.font(size: 8, weight: .medium))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                 }
             }
 
             Text(item.title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(WidgetTypography.font(size: 11, weight: .semibold))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
                 .minimumScaleFactor(0.9)
 
             if !item.detail.isEmpty {
                 Text(localizedTaskDetail(item.detail, language: language))
-                    .font(.system(size: 9, weight: .medium))
+                    .font(WidgetTypography.font(size: 9, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -6569,7 +6641,7 @@ struct TaskAvatar: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .font(WidgetTypography.font(size: 9, weight: .bold, design: .rounded))
             .foregroundStyle(taskAccentColor(kind).opacity(0.85))
             .frame(width: 18, height: 18)
             .background(
@@ -6586,9 +6658,9 @@ struct TaskChip: View {
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: chipIcon)
-                .font(.system(size: 8, weight: .bold))
+                .font(WidgetTypography.font(size: 8, weight: .bold))
             Text(text)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .font(WidgetTypography.font(size: 9, weight: .bold, design: .rounded))
                 .lineLimit(1)
         }
         .foregroundStyle(chipColor)
@@ -6636,10 +6708,10 @@ struct InfoChip: View {
     var body: some View {
         HStack(spacing: 5) {
             Text(title)
-                .font(.system(size: 9, weight: .medium))
+                .font(WidgetTypography.font(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .font(WidgetTypography.font(size: 10, weight: .semibold, design: .rounded))
                 .monospacedDigit()
         }
         .padding(.horizontal, 7)
@@ -6663,11 +6735,11 @@ struct MetricTile: View {
                     .fill(tint)
                     .frame(width: 6, height: 6)
                 Text(title)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(WidgetTypography.font(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
             Text(value)
-                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .font(WidgetTypography.font(size: 16, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -6755,6 +6827,18 @@ enum WidgetPalette {
     static let statusNeutral = Color(red: 0.596, green: 0.596, blue: 0.616) // #98989D
     static let dataReasoning = Color(red: 0.749, green: 0.353, blue: 0.949) // #BF5AF2
     static let dataFlowParticle = NSColor.white
+
+    static var dataUncachedInput: Color {
+        usesAbsolutelyTheme ? brandPrimaryLight : statusInfo
+    }
+
+    static var dataCachedInput: Color {
+        usesAbsolutelyTheme ? brandPrimary : brandSecondary
+    }
+
+    static var dataOutputToken: Color {
+        usesAbsolutelyTheme ? brandSecondary : statusWarning
+    }
 
     static var surfaceTrack: Color {
         usesAbsolutelyTheme
@@ -6856,9 +6940,9 @@ private var quotaSecondaryStartColor: RingRGBColor { WidgetPalette.brandHighligh
 private var quotaSecondaryEndColor: RingRGBColor { WidgetPalette.brandSecondaryRGB }
 private var quotaSecondaryColor: Color { quotaSecondaryEndColor.color }
 private var quotaSecondaryTrackColor: Color { WidgetPalette.surfaceTrack }
-private let uncachedInputColor = WidgetPalette.statusInfo
-private var cachedInputColor: Color { WidgetPalette.brandSecondary }
-private let outputTokenColor = WidgetPalette.statusWarning
+private var uncachedInputColor: Color { WidgetPalette.dataUncachedInput }
+private var cachedInputColor: Color { WidgetPalette.dataCachedInput }
+private var outputTokenColor: Color { WidgetPalette.dataOutputToken }
 private let dashboardGridSpacing: CGFloat = 10
 private let dashboardCardPadding: CGFloat = 10
 private let dashboardCardCornerRadius: CGFloat = 10

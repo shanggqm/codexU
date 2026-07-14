@@ -81,7 +81,7 @@ struct StatusItemSettingsView: View {
                 preferenceError = nil
             } label: {
                 Label(language.text("恢复默认", "Restore"), systemImage: "arrow.counterclockwise")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(WidgetTypography.font(size: 11, weight: .semibold))
                     .foregroundStyle(WidgetPalette.brandPrimary)
                     .frame(width: statusItemSettingsAccessoryWidth, height: statusItemSettingsControlHeight)
                     .background(
@@ -230,7 +230,7 @@ private struct StatusItemMetricMultiSelectControl: View {
                     onToggle(metric)
                 } label: {
                     Text(label(for: metric))
-                        .font(.system(size: 11, weight: isSelected(metric) ? .semibold : .medium))
+                        .font(WidgetTypography.font(size: 11, weight: isSelected(metric) ? .semibold : .medium))
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
                         .foregroundStyle(isSelected(metric) ? Color.white : Color.secondary)

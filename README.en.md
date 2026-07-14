@@ -35,7 +35,7 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - Shows top tool calls and top Skill usage to explain the structure of local Codex work.
 - Runs as a standard macOS window with Dock, system window controls, minimization, and optional background running after the main window is closed. Closing the main window hides the Dock icon and keeps the menu bar item.
 - Uses `Command + U` by default to show or hide the main window, and the shortcut can be customized in Settings. The menu bar runtime menu can also open the main window, open settings, or quit.
-- Includes a Settings window for Chinese/English UI text, system/light/dark appearance plus a warm Absolutely theme, menu bar content with live preview, always-on-top behavior, close-window behavior, system status, and update check configuration.
+- Includes a Settings window for Chinese/English UI text, system/light/dark appearance, and a warm Absolutely theme. The theme prefers Noto Serif CJK SC for Chinese and resolves Latin text, numbers, and code through Fira Code, Fira Mono, Menlo, Consolas, and DejaVu Sans Mono in order. Settings also covers menu bar content with live preview, always-on-top behavior, close-window behavior, system status, and update checks.
 - Checks GitHub Releases for newer versions by default, including beta releases, and offers the DMG that matches the current Mac architecture. It does not silently download or install updates, and automatic checks can be turned off.
 - Reads data locally and does not upload usage, threads, or account data to a third-party service.
 

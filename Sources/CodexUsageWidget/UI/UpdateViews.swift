@@ -12,7 +12,7 @@ struct AppUpdateFooterButton: View {
                 updateStore.openPreferredUpdateURL()
             } label: {
                 Label(language.text("新版 \(version)", "Update \(version)"), systemImage: "arrow.down.circle.fill")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(WidgetTypography.font(size: 10, weight: .semibold))
                     .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.plain)
@@ -37,22 +37,22 @@ struct AppUpdateMenuRow: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: statusIcon)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(WidgetTypography.font(size: 12, weight: .semibold))
                     .foregroundStyle(statusColor)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(statusTitle)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(WidgetTypography.font(size: 11, weight: .semibold))
                         .foregroundStyle(.primary)
                     Text(statusDetail)
-                        .font(.system(size: 9, weight: .medium))
+                        .font(WidgetTypography.font(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: trailingIcon)
-                    .font(.system(size: 10, weight: .bold))
+                    .font(WidgetTypography.font(size: 10, weight: .bold))
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 10)
@@ -222,7 +222,7 @@ private struct UpdateIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .semibold))
+                .font(WidgetTypography.font(size: 12, weight: .semibold))
                 .foregroundStyle(foregroundColor)
                 .frame(width: 30, height: 28)
                 .background(
