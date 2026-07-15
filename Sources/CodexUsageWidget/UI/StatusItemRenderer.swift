@@ -4,17 +4,17 @@ private struct StatusItemQuotaPalette {
     let start: NSColor
     let end: NSColor
 
-    static func palette(for role: StatusItemQuotaPaletteRole?) -> StatusItemQuotaPalette {
+    static func palette(for role: StatusItemQuotaPaletteRole?, tokens: ResolvedVisualTokens) -> StatusItemQuotaPalette {
         switch role {
         case .primary:
             return StatusItemQuotaPalette(
-                start: WidgetPalette.brandPrimaryLightRGB.nsColor,
-                end: WidgetPalette.brandPrimaryRGB.nsColor
+                start: tokens.quota.primary.start.nsColor,
+                end: tokens.quota.primary.end.nsColor
             )
         case .secondary:
             return StatusItemQuotaPalette(
-                start: WidgetPalette.brandHighlightRGB.nsColor,
-                end: WidgetPalette.brandSecondaryRGB.nsColor
+                start: tokens.quota.secondary.start.nsColor,
+                end: tokens.quota.secondary.end.nsColor
             )
         case nil:
             return StatusItemQuotaPalette(
@@ -22,12 +22,6 @@ private struct StatusItemQuotaPalette {
                 end: NSColor.secondaryLabelColor
             )
         }
-    }
-}
-
-private extension RingRGBColor {
-    var nsColor: NSColor {
-        NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
     }
 }
 
@@ -50,20 +44,21 @@ struct StatusItemRenderer {
 
     func render(
         _ presentation: StatusItemPresentation,
+        tokens: ResolvedVisualTokens,
         appearance: NSAppearance? = nil
     ) -> NSImage {
         guard let appearance else {
-            return renderImage(presentation)
+            return renderImage(presentation, tokens: tokens)
         }
 
         var image: NSImage?
         appearance.performAsCurrentDrawingAppearance {
-            image = renderImage(presentation)
+            image = renderImage(presentation, tokens: tokens)
         }
-        return image ?? renderImage(presentation)
+        return image ?? renderImage(presentation, tokens: tokens)
     }
 
-    private func renderImage(_ presentation: StatusItemPresentation) -> NSImage {
+    private func renderImage(_ presentation: StatusItemPresentation, tokens: ResolvedVisualTokens) -> NSImage {
         let image = NSImage(size: presentation.imageSize)
         image.lockFocus()
         defer {
@@ -75,17 +70,17 @@ struct StatusItemRenderer {
 
         switch presentation.mode {
         case .minimal:
-            drawMinimal(presentation)
+            drawMinimal(presentation, tokens: tokens)
         case .classic:
-            drawClassic(presentation)
+            drawClassic(presentation, tokens: tokens)
         case .rich:
-            drawRich(presentation)
+            drawRich(presentation, tokens: tokens)
         }
 
         return image
     }
 
-    private func drawMinimal(_ presentation: StatusItemPresentation) {
+    private func drawMinimal(_ presentation: StatusItemPresentation, tokens: ResolvedVisualTokens) {
         if presentation.showsNoActiveQuota {
             drawNoActiveQuota(
                 in: NSRect(
@@ -114,12 +109,13 @@ struct StatusItemRenderer {
                 fraction: metric.fraction,
                 role: metric.paletteRole,
                 quotaMode: presentation.quotaMode,
+                tokens: tokens,
                 lineWidth: lineWidth
             )
         }
     }
 
-    private func drawClassic(_ presentation: StatusItemPresentation) {
+    private func drawClassic(_ presentation: StatusItemPresentation, tokens: ResolvedVisualTokens) {
         drawRuntimeLogo(presentation.runtime, in: NSRect(x: 2, y: 2, width: 18, height: 18))
         var x = StatusItemLayoutMetrics.leadingContentWidth
 
@@ -135,6 +131,7 @@ struct StatusItemRenderer {
                 fraction: metric.fraction,
                 role: metric.paletteRole,
                 quotaMode: presentation.quotaMode,
+                tokens: tokens,
                 lineWidth: 1.5
             )
             drawText(
@@ -152,7 +149,7 @@ struct StatusItemRenderer {
         }
     }
 
-    private func drawRich(_ presentation: StatusItemPresentation) {
+    private func drawRich(_ presentation: StatusItemPresentation, tokens: ResolvedVisualTokens) {
         drawRuntimeLogo(presentation.runtime, in: NSRect(x: 2, y: 2, width: 18, height: 18))
         let quotaMetrics = presentation.quotaMetrics
 
@@ -165,19 +162,22 @@ struct StatusItemRenderer {
                 quotaMetrics[0],
                 y: 11.3,
                 showsReset: presentation.showsResetCountdown,
-                quotaMode: presentation.quotaMode
+                quotaMode: presentation.quotaMode,
+                tokens: tokens
             )
             drawRichQuotaRow(
                 quotaMetrics[1],
                 y: 1.2,
                 showsReset: presentation.showsResetCountdown,
-                quotaMode: presentation.quotaMode
+                quotaMode: presentation.quotaMode,
+                tokens: tokens
             )
         } else if let metric = quotaMetrics.first {
             drawRichSingleQuota(
                 metric,
                 showsReset: presentation.showsResetCountdown,
-                quotaMode: presentation.quotaMode
+                quotaMode: presentation.quotaMode,
+                tokens: tokens
             )
         }
 
@@ -212,7 +212,8 @@ struct StatusItemRenderer {
     private func drawRichSingleQuota(
         _ metric: StatusItemMetricPresentation,
         showsReset: Bool,
-        quotaMode: QuotaDisplayMode
+        quotaMode: QuotaDisplayMode,
+        tokens: ResolvedVisualTokens
     ) {
         drawText(
             metric.label,
@@ -227,7 +228,8 @@ struct StatusItemRenderer {
             in: barRect,
             fraction: metric.fraction,
             role: metric.paletteRole,
-            quotaMode: quotaMode
+            quotaMode: quotaMode,
+            tokens: tokens
         )
         let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 8.6, weight: .bold)
         let valueColor = metric.isAvailable ? primaryTextColor : mutedTextColor
@@ -268,7 +270,8 @@ struct StatusItemRenderer {
         _ metric: StatusItemMetricPresentation,
         y: CGFloat,
         showsReset: Bool,
-        quotaMode: QuotaDisplayMode
+        quotaMode: QuotaDisplayMode,
+        tokens: ResolvedVisualTokens
     ) {
         drawText(
             metric.label,
@@ -281,7 +284,8 @@ struct StatusItemRenderer {
             in: NSRect(x: 45, y: y + 2.2, width: 23, height: 4),
             fraction: metric.fraction,
             role: metric.paletteRole,
-            quotaMode: quotaMode
+            quotaMode: quotaMode,
+            tokens: tokens
         )
         drawText(
             metric.value,
@@ -376,6 +380,7 @@ struct StatusItemRenderer {
         fraction: CGFloat?,
         role: StatusItemQuotaPaletteRole?,
         quotaMode: QuotaDisplayMode,
+        tokens: ResolvedVisualTokens,
         lineWidth: CGFloat
     ) {
         let center = CGPoint(x: rect.midX, y: rect.midY)
@@ -396,7 +401,7 @@ struct StatusItemRenderer {
         guard let fraction else { return }
         let progress = max(0, min(1, fraction))
         guard progress > 0.001 else { return }
-        let palette = StatusItemQuotaPalette.palette(for: role)
+        let palette = StatusItemQuotaPalette.palette(for: role, tokens: tokens)
         let segmentCount = max(12, Int(ceil(progress * 72)))
         let direction: CGFloat = quotaMode.drawsClockwise ? -1 : 1
         for index in 0..<segmentCount {
@@ -441,7 +446,8 @@ struct StatusItemRenderer {
         in rect: NSRect,
         fraction: CGFloat?,
         role: StatusItemQuotaPaletteRole?,
-        quotaMode: QuotaDisplayMode
+        quotaMode: QuotaDisplayMode,
+        tokens: ResolvedVisualTokens
     ) -> NSBezierPath? {
         trackColor.setFill()
         NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2).fill()
@@ -458,7 +464,7 @@ struct StatusItemRenderer {
             xRadius: fillRadius,
             yRadius: fillRadius
         )
-        let palette = StatusItemQuotaPalette.palette(for: role)
+        let palette = StatusItemQuotaPalette.palette(for: role, tokens: tokens)
         guard let context = NSGraphicsContext.current?.cgContext,
               let gradient = CGGradient(
                 colorsSpace: CGColorSpaceCreateDeviceRGB(),

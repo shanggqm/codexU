@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="145" height="145" viewBox="0 0 145 145" fill="none">
+  <defs><radialGradient id="celadon"><stop offset="0" stop-color="#dce9e4"/><stop offset=".7" stop-color="#b9d0c7"/><stop offset="1" stop-color="#7fa49d"/></radialGradient><mask id="ring"><circle cx="72.5" cy="72.5" r="63" stroke="#fff" stroke-width="22"/></mask></defs>
+  <circle cx="72.5" cy="72.5" r="63" stroke="url(#celadon)" stroke-width="22"/>
+  <g mask="url(#ring)" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#365e5d" stroke-width=".9" opacity=".72"><path d="M-5 18L18 25L31 9L47 30L67 15L83 34L104 18L121 38L150 25"/><path d="M-4 55L20 43L39 62L57 46L75 70L96 49L116 65L145 50"/><path d="M-3 94L18 76L37 95L54 80L73 103L92 82L112 105L148 87"/><path d="M-5 128L21 112L38 135L61 116L80 139L101 119L123 137L150 120"/><path d="M20-5L18 25L20 43L18 76L21 112L21 150M47-4L31 9L47 30L39 62L37 95L38 135L31 150M75-3L67 15L83 34L75 70L73 103L80 139L74 150M107-4L104 18L96 49L92 82L112 105L101 119L105 150M137-3L121 38L145 50L148 87L123 137L137 150"/></g>
+    <g stroke="#9b7250" stroke-width=".45" opacity=".48"><path d="M31 9L24 2M47 30L54 22M39 62L29 57M75 70L84 62M37 95L28 103M73 103L66 114M112 105L121 96M80 139L73 147M123 137L132 129"/></g>
+  </g>
+  <circle cx="72.5" cy="72.5" r="52" stroke="#365e5d" stroke-width=".7" opacity=".55"/><circle cx="72.5" cy="72.5" r="74" stroke="#d7e6df" stroke-width=".7" opacity=".75"/>
+</svg>

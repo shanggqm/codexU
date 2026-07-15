@@ -229,7 +229,9 @@ enum StatusItemPresentationSelfTest {
             "minimal quota rings should remain visibly separated"
         )
         let renderer = StatusItemRenderer()
-        let minimalImage = renderer.render(minimal, appearance: NSAppearance(named: .aqua))
+        let lightTokens = ResolvedVisualTokens.safeDefault(.light)
+        let darkTokens = ResolvedVisualTokens.safeDefault(.dark)
+        let minimalImage = renderer.render(minimal, tokens: lightTokens, appearance: NSAppearance(named: .aqua))
         if let bitmap = minimalImage.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)),
            let center = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2) {
             expect(center.alphaComponent < 0.01, "minimal mode center should remain transparent without a runtime logo")
@@ -267,10 +269,20 @@ enum StatusItemPresentationSelfTest {
         let classic = builder.build(source: source, preferences: classicPreferences, language: .en, now: now)
         expect(classic.itemLength <= 88, "classic double-ring item should stay within 88pt")
         expect(classic.mode == .classic, "classic presentation should select the number-ring renderer")
-        let aquaImage = renderer.render(classic, appearance: NSAppearance(named: .aqua))
-        let darkImage = renderer.render(classic, appearance: NSAppearance(named: .darkAqua))
+        let aquaImage = renderer.render(classic, tokens: lightTokens, appearance: NSAppearance(named: .aqua))
+        let darkImage = renderer.render(classic, tokens: darkTokens, appearance: NSAppearance(named: .darkAqua))
         expect(aquaImage.size == classic.imageSize, "Aqua render should preserve presentation size")
         expect(darkImage.size == classic.imageSize, "Dark Aqua render should preserve presentation size")
+        let paletteCatalog = PaletteCatalog.loadFromMainBundle()
+        for paletteID in [PaletteCatalog.defaultPaletteID, "codexu.blue-white-porcelain"] {
+            for paletteAppearance in PaletteAppearance.allCases {
+                let tokens = paletteCatalog.resolve(id: paletteID, appearance: paletteAppearance)
+                let appearance = NSAppearance(named: paletteAppearance == .dark ? .darkAqua : .aqua)
+                let image = renderer.render(classic, tokens: tokens, appearance: appearance)
+                expect(image.size == classic.imageSize, "\(paletteID) \(paletteAppearance.rawValue) should preserve menu bar geometry")
+                expect(image.tiffRepresentation != nil, "\(paletteID) \(paletteAppearance.rawValue) should render a bitmap")
+            }
+        }
         if let bitmap = aquaImage.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)),
            let corner = bitmap.colorAt(x: 0, y: 0) {
             expect(corner.alphaComponent < 0.01, "status item image background should remain transparent")
@@ -329,8 +341,8 @@ enum StatusItemPresentationSelfTest {
                 "the rich reset slot should fit the normal countdown boundary \(resetText)"
             )
         }
-        let singleRichAqua = renderer.render(singleRich, appearance: NSAppearance(named: .aqua))
-        let singleRichDark = renderer.render(singleRich, appearance: NSAppearance(named: .darkAqua))
+        let singleRichAqua = renderer.render(singleRich, tokens: lightTokens, appearance: NSAppearance(named: .aqua))
+        let singleRichDark = renderer.render(singleRich, tokens: darkTokens, appearance: NSAppearance(named: .darkAqua))
         expect(singleRichAqua.size == singleRich.imageSize, "single rich Aqua render should preserve its size")
         expect(singleRichDark.size == singleRich.imageSize, "single rich Dark Aqua render should preserve its size")
         if let bitmap = singleRichAqua.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)) {
@@ -432,6 +444,7 @@ enum StatusItemPresentationSelfTest {
         )
         let minuteResetSingleImage = renderer.render(
             minuteResetSingle,
+            tokens: lightTokens,
             appearance: NSAppearance(named: .aqua)
         )
         if let bounds = resetInkBounds(in: minuteResetSingleImage) {
@@ -465,6 +478,7 @@ enum StatusItemPresentationSelfTest {
         )
         let minuteResetDualImage = renderer.render(
             minuteResetDual,
+            tokens: lightTokens,
             appearance: NSAppearance(named: .aqua)
         )
         if let bounds = resetInkBounds(in: minuteResetDualImage) {
@@ -514,6 +528,7 @@ enum StatusItemPresentationSelfTest {
         )
         let emptyAvailableImage = renderer.render(
             emptyAvailable,
+            tokens: lightTokens,
             appearance: NSAppearance(named: .aqua)
         )
         if let bitmap = emptyAvailableImage.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)) {

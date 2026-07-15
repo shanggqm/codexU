@@ -8,6 +8,7 @@ struct StatusItemSettingsView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var store: UsageStore
     @State private var preferenceError: StatusItemPreferenceError?
+    @Environment(\.visualTokens) private var visualTokens
 
     private var language: WidgetLanguage { settings.language }
     private var preferences: StatusItemPreferences { settings.statusItemPreferences }
@@ -82,11 +83,11 @@ struct StatusItemSettingsView: View {
             } label: {
                 Label(language.text("恢复默认", "Restore"), systemImage: "arrow.counterclockwise")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(WidgetPalette.brandPrimary)
+                    .foregroundStyle(visualTokens.selection.foreground.color)
                     .frame(width: statusItemSettingsAccessoryWidth, height: statusItemSettingsControlHeight)
                     .background(
                         RoundedRectangle(cornerRadius: statusItemSettingsCornerRadius, style: .continuous)
-                            .fill(WidgetPalette.brandPrimary.opacity(0.10))
+                            .fill(visualTokens.selection.fill.color)
                     )
             }
             .buttonStyle(.plain)
@@ -169,6 +170,7 @@ private struct StatusItemPreviewRow: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var store: UsageStore
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.visualTokens) private var visualTokens
 
     private let builder = StatusItemPresentationBuilder()
     private let renderer = StatusItemRenderer()
@@ -181,7 +183,7 @@ private struct StatusItemPreviewRow: View {
             ZStack {
                 RoundedRectangle(cornerRadius: statusItemSettingsCornerRadius, style: .continuous)
                     .fill(previewBackground)
-                Image(nsImage: renderer.render(presentation, appearance: previewAppearance))
+                Image(nsImage: renderer.render(presentation, tokens: visualTokens, appearance: previewAppearance))
                     .interpolation(.high)
                     .frame(
                         width: presentation.imageSize.width,
@@ -222,6 +224,7 @@ private struct StatusItemPreviewRow: View {
 
 private struct StatusItemMetricMultiSelectControl: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.visualTokens) private var visualTokens
     let selectedMetrics: Set<StatusItemMetric>
     let language: WidgetLanguage
     let onToggle: (StatusItemMetric) -> Void
@@ -254,7 +257,7 @@ private struct StatusItemMetricMultiSelectControl: View {
 
                 if index < StatusItemMetric.allCases.count - 1 {
                     Rectangle()
-                        .fill(WidgetPalette.controlStroke(colorScheme))
+                        .fill(FixedVisualPalette.controlStroke(colorScheme))
                         .frame(width: 1, height: 16)
                         .padding(.horizontal, 1)
                 }
@@ -264,10 +267,10 @@ private struct StatusItemMetricMultiSelectControl: View {
         .frame(width: statusItemSettingsAccessoryWidth, height: statusItemSettingsControlHeight + 6)
         .background(
             RoundedRectangle(cornerRadius: statusItemSettingsCornerRadius, style: .continuous)
-                .fill(WidgetPalette.controlFill(colorScheme))
+                .fill(FixedVisualPalette.controlFill(colorScheme))
                 .overlay(
                     RoundedRectangle(cornerRadius: statusItemSettingsCornerRadius, style: .continuous)
-                        .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                        .strokeBorder(FixedVisualPalette.controlStroke(colorScheme), lineWidth: 0.8)
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: statusItemSettingsCornerRadius, style: .continuous))
@@ -291,11 +294,11 @@ private struct StatusItemMetricMultiSelectControl: View {
     private func selectionColor(for metric: StatusItemMetric) -> Color {
         switch metric {
         case .fiveHourQuota:
-            return WidgetPalette.brandPrimary
+            return visualTokens.quota.primary.end.color
         case .sevenDayQuota:
-            return WidgetPalette.brandSecondary
+            return visualTokens.quota.secondary.end.color
         case .todayTokens:
-            return WidgetPalette.brandPrimaryStrong
+            return visualTokens.accent.primaryStrong.color
         }
     }
 }

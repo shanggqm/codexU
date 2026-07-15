@@ -25,7 +25,7 @@ struct RuntimeSelector: View {
                     .padding(.horizontal, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(selected == scope ? WidgetPalette.controlSelectedFill(colorScheme) : Color.clear)
+                            .fill(selected == scope ? FixedVisualPalette.controlSelectedFill(colorScheme) : Color.clear)
                     )
                 }
                 .buttonStyle(.plain)
@@ -35,10 +35,10 @@ struct RuntimeSelector: View {
         .padding(3)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(WidgetPalette.controlFill(colorScheme))
+                .fill(FixedVisualPalette.controlFill(colorScheme))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                        .strokeBorder(FixedVisualPalette.controlStroke(colorScheme), lineWidth: 0.8)
                 )
         )
     }
@@ -86,6 +86,11 @@ struct RuntimeStatusMenuView: View {
         }
         .padding(14)
         .frame(width: 380, height: runtimeStatusPopoverHeight(for: displayedScopes.count), alignment: .top)
+        .appVisualEnvironment(
+            catalog: settings.paletteCatalog,
+            paletteID: settings.paletteID,
+            appearance: PaletteAppearance(colorScheme)
+        )
         .readableForegroundHierarchy(colorScheme)
     }
 
@@ -135,10 +140,10 @@ struct RuntimeStatusMenuView: View {
         .padding(.vertical, 9)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(WidgetPalette.controlFill(colorScheme))
+                .fill(FixedVisualPalette.controlFill(colorScheme))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                        .strokeBorder(FixedVisualPalette.controlStroke(colorScheme), lineWidth: 0.8)
                 )
         )
     }
@@ -171,10 +176,10 @@ struct RuntimeStatusMenuView: View {
                 .frame(maxWidth: .infinity, minHeight: 32)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(WidgetPalette.controlFill(colorScheme))
+                        .fill(FixedVisualPalette.controlFill(colorScheme))
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                                .strokeBorder(FixedVisualPalette.controlStroke(colorScheme), lineWidth: 0.8)
                         )
                 )
         }
@@ -197,6 +202,7 @@ struct RuntimeStatusMenuView: View {
 }
 
 struct RuntimeSummaryCard: View {
+    @Environment(\.visualTokens) private var visualTokens
     @Environment(\.colorScheme) private var colorScheme
     let summary: RuntimeMenuSummary
     let isSelected: Bool
@@ -254,10 +260,10 @@ struct RuntimeSummaryCard: View {
             .frame(maxWidth: .infinity, minHeight: 118, maxHeight: 118, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? selectedFill : WidgetPalette.cardFill(colorScheme))
+                    .fill(isSelected ? selectedFill : FixedVisualPalette.cardFill(colorScheme))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(isSelected ? selectedStroke : WidgetPalette.cardStroke(colorScheme), lineWidth: 0.9)
+                            .strokeBorder(isSelected ? selectedStroke : FixedVisualPalette.cardStroke(colorScheme), lineWidth: 0.9)
                     )
             )
         }
@@ -301,7 +307,7 @@ struct RuntimeSummaryCard: View {
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
                     Capsule(style: .continuous)
-                        .fill(WidgetPalette.surfaceTrack)
+                        .fill(FixedVisualPalette.surfaceTrack)
                     Capsule(style: .continuous)
                         .fill(statusTint.opacity(0.72))
                         .frame(width: proxy.size.width * CGFloat(max(0, min(100, item.value)) / 100))
@@ -387,22 +393,22 @@ struct RuntimeSummaryCard: View {
     private var statusTint: Color {
         switch summary.status {
         case .available:
-            return WidgetPalette.statusSuccess
+            return FixedVisualPalette.statusSuccess
         case .localOnly, .snapshotNeeded:
-            return WidgetPalette.statusWarning
+            return FixedVisualPalette.statusWarning
         case .stale:
-            return WidgetPalette.statusInfo
+            return FixedVisualPalette.statusInfo
         case .unavailable:
-            return WidgetPalette.statusDanger
+            return FixedVisualPalette.statusDanger
         }
     }
 
     private var selectedFill: Color {
-        WidgetPalette.brandPrimary.opacity(colorScheme == .dark ? 0.20 : 0.12)
+        visualTokens.selection.fill.color
     }
 
     private var selectedStroke: Color {
-        WidgetPalette.brandPrimary.opacity(colorScheme == .dark ? 0.42 : 0.34)
+        visualTokens.selection.stroke.color
     }
 
     private var localizedSourceLabel: String {
@@ -461,14 +467,14 @@ struct RuntimeLogoView: View {
                     .scaledToFit()
                     .padding(size * 0.18)
                     .foregroundStyle(.secondary)
-                    .background(WidgetPalette.controlFill(colorScheme))
+                    .background(FixedVisualPalette.controlFill(colorScheme))
             }
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: max(4, size * 0.22), style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: max(4, size * 0.22), style: .continuous)
-                .strokeBorder(WidgetPalette.cardStroke(colorScheme), lineWidth: 0.7)
+                .strokeBorder(FixedVisualPalette.cardStroke(colorScheme), lineWidth: 0.7)
         )
         .accessibilityHidden(true)
     }

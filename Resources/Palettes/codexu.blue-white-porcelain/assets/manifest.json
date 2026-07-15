@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "assets": [
+    { "slot": "quota.ring.primary", "appearance": "light", "lod": "l2", "path": "light/quota-primary-ring.svg", "renderMode": "fullRing", "fallback": "quota.primary.gradient" },
+    { "slot": "quota.ring.secondary", "appearance": "light", "lod": "l2", "path": "light/quota-secondary-ring.svg", "renderMode": "fullRing", "fallback": "quota.secondary.gradient" },
+    { "slot": "quota.cap.primary", "appearance": "light", "lod": "l2", "path": "light/quota-primary-cap.svg", "renderMode": "fixed", "fallback": "quota.primary.end" },
+    { "slot": "quota.cap.secondary", "appearance": "light", "lod": "l2", "path": "light/quota-secondary-cap.svg", "renderMode": "fixed", "fallback": "quota.secondary.end" },
+    { "slot": "progress.linear", "appearance": "light", "lod": "l1", "path": "light/progress-linear.svg", "renderMode": "tileX", "fallback": "data.valueProgress" },
+    { "slot": "chart.bar", "appearance": "light", "lod": "l2", "path": "light/chart-bar.svg", "renderMode": "tileY", "fallback": "data.series.0" },
+    { "slot": "quota.ring.primary", "appearance": "dark", "lod": "l2", "path": "dark/quota-primary-ring.svg", "renderMode": "fullRing", "fallback": "quota.primary.gradient" },
+    { "slot": "quota.ring.secondary", "appearance": "dark", "lod": "l2", "path": "dark/quota-secondary-ring.svg", "renderMode": "fullRing", "fallback": "quota.secondary.gradient" },
+    { "slot": "quota.cap.primary", "appearance": "dark", "lod": "l2", "path": "dark/quota-primary-cap.svg", "renderMode": "fixed", "fallback": "quota.primary.end" },
+    { "slot": "quota.cap.secondary", "appearance": "dark", "lod": "l2", "path": "dark/quota-secondary-cap.svg", "renderMode": "fixed", "fallback": "quota.secondary.end" },
+    { "slot": "progress.linear", "appearance": "dark", "lod": "l1", "path": "dark/progress-linear.svg", "renderMode": "tileX", "fallback": "data.valueProgress" },
+    { "slot": "chart.bar", "appearance": "dark", "lod": "l2", "path": "dark/chart-bar.svg", "renderMode": "tileY", "fallback": "data.series.0" }
+  ]
+}

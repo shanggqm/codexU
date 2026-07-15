@@ -1,0 +1,17 @@
+{
+  "accent": { "primary": "#2866F7", "primaryStrong": "#1F59ED", "primaryLight": "#7BA0FF", "secondary": "#8B6DFF", "secondaryStrong": "#6D45E8", "highlight": "#DAA3FA" },
+  "quota": {
+    "primary": { "start": "#7BA0FF", "end": "#2866F7", "track": "#2866F71A", "label": "#2866F7" },
+    "secondary": { "start": "#DAA3FA", "end": "#8B6DFF", "track": "#8B6DFF1A", "label": "#8B6DFF" }
+  },
+  "data": {
+    "series": ["#2866F7", "#8B6DFF", "#DAA3FA"],
+    "tokenInput": "#0A84FF", "tokenCached": "#8B6DFF", "tokenOutput": "#FF9F0A",
+    "heatmap": ["#0000001A", "#2866F747", "#2866F775", "#2866F7B3", "#2866F7F5"],
+    "zero": "#98989D59", "valueProgress": ["#7BA0FF", "#2866F7", "#6D45E8"],
+    "milestones": ["#2866F7", "#8B6DFF", "#DAA3FA"]
+  },
+  "selection": { "foreground": "#2866F7", "fill": "#2866F71F", "stroke": "#2866F757", "focusRing": "#2866F7A6" },
+  "surfaceTint": { "color": "#2866F7", "maximumOpacity": 0.08 },
+  "ornament": { "ink": "#2866F7", "inkSoft": "#7BA0FF", "secondaryInk": "#8B6DFF", "highlight": "#FFFFFF", "metal": "#D2B27B" }
+}

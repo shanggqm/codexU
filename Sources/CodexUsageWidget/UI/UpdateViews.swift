@@ -16,7 +16,7 @@ struct AppUpdateFooterButton: View {
                     .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(WidgetPalette.statusInfo)
+            .foregroundStyle(FixedVisualPalette.statusInfo)
             .help(language.text("下载新版 codexU", "Download the latest codexU release"))
         }
     }
@@ -59,10 +59,10 @@ struct AppUpdateMenuRow: View {
             .padding(.vertical, 9)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(WidgetPalette.controlFill(colorScheme))
+                    .fill(FixedVisualPalette.controlFill(colorScheme))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                            .strokeBorder(FixedVisualPalette.controlStroke(colorScheme), lineWidth: 0.8)
                     )
             )
         }
@@ -130,13 +130,13 @@ struct AppUpdateMenuRow: View {
     private var statusColor: Color {
         switch updateStore.result.status {
         case .updateAvailable, .checking:
-            return WidgetPalette.statusInfo
+            return FixedVisualPalette.statusInfo
         case .upToDate:
-            return WidgetPalette.statusSuccess
+            return FixedVisualPalette.statusSuccess
         case .failed:
-            return WidgetPalette.statusWarning
+            return FixedVisualPalette.statusWarning
         case .disabled, .idle:
-            return WidgetPalette.statusNeutral
+            return FixedVisualPalette.statusNeutral
         }
     }
 }
@@ -171,7 +171,7 @@ struct AppUpdateSettingsRows: View {
                     UpdateIconButton(
                         systemName: "arrow.down.circle.fill",
                         help: language.text("下载新版", "Download update"),
-                        tint: WidgetPalette.statusInfo
+                        tint: FixedVisualPalette.statusInfo
                     ) {
                         updateStore.openPreferredUpdateURL()
                     }
@@ -227,10 +227,10 @@ private struct UpdateIconButton: View {
                 .frame(width: 30, height: 28)
                 .background(
                     RoundedRectangle(cornerRadius: updateControlCornerRadius, style: .continuous)
-                        .fill(isHovering ? WidgetPalette.controlSelectedFill(colorScheme) : WidgetPalette.controlFill(colorScheme))
+                        .fill(isHovering ? FixedVisualPalette.controlSelectedFill(colorScheme) : FixedVisualPalette.controlFill(colorScheme))
                         .overlay(
                             RoundedRectangle(cornerRadius: updateControlCornerRadius, style: .continuous)
-                                .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                                .strokeBorder(FixedVisualPalette.controlStroke(colorScheme), lineWidth: 0.8)
                         )
                 )
         }
