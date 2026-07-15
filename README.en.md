@@ -97,9 +97,9 @@ After installation, codexU checks GitHub Releases for new versions at most once 
 
 ## Requirements
 
-- macOS 14 or later.
-- A local Codex installation is used for local token, trend, project, and task statistics; CPA-only remote quota does not depend on the local account quota.
-- A signed-in local Codex account for the local quota source, or an accessible CPA Management API for the CPA quota source.
+- macOS 13 or later.
+- A local Codex installation.
+- A signed-in Codex account for quota data.
 - Codex must have been used at least once so `~/.codex/state_5.sqlite` exists.
 - Claude Code support is optional. Historical tokens come from `~/.claude/projects/**/*.jsonl`; quota requires a local statusLine snapshot cache.
 - Xcode Command Line Tools for building from source.
@@ -185,7 +185,7 @@ The current local Codex API exposes rolling-window usage percentages and reset t
 
 ### Does codexU support Intel Macs?
 
-Yes. Intel Macs should use `codexU-<version>-mac-x86_64.dmg`. From source, package it with `make release-intel`, or override `TARGET_TRIPLE="x86_64-apple-macos14.0"` from a compatible toolchain.
+Yes. Intel Macs should use `codexU-<version>-mac-x86_64.dmg`. From source, package it with `make release-intel`, or override `TARGET_TRIPLE="x86_64-apple-macos13.0"` from a compatible toolchain.
 
 ## License
 

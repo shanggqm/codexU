@@ -3,7 +3,7 @@
 > [!IMPORTANT]
 > **建议升级到 v1.0.5 或更高版本。** v1.0.5 会按 Codex 实际返回的额度窗口自适应单环/双环和菜单栏布局，保留完整粒子体验但只在窗口置前聚焦时渲染，并进一步减少后台轮询、异常额度响应和 Claude Code 缓存带来的资源与可靠性问题；同时继续兼容 ChatGPT.app、旧版 Codex.app 与标准 CLI 路径。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
 
-[English](README.en.md)
+[产品官网](https://shanggqm.github.io/codexU-site/) · [下载最新版本](https://github.com/shanggqm/codexU/releases/latest) · [English](README.en.md)
 
 codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / ChatGPT Codex 和 Claude Code 的额度窗口、token 用量和今日任务状态。它把常用信息放在菜单栏和主窗口里，帮助你快速判断剩余额度、重置时间和当天工作进展。
 
@@ -124,9 +124,9 @@ codexU 需要读取本机 `~/.codex/` 下的 Codex 数据；如果启用 Claude 
 
 ## 运行要求
 
-- macOS 14 或更新版本。
-- 本机 Codex 安装用于 token、趋势、项目和任务等本地统计；只查看 CPA 远程额度时可以不依赖本机账户额度。
-- 使用本机额度源时需要登录 Codex；使用 CPA 额度源时需要可访问的 CPA Management API。
+- macOS 13 或更新版本。
+- 本机已安装 Codex。
+- 已登录 Codex 账户，额度信息才会显示。
 - Codex 至少使用过一次，以便生成 `~/.codex/state_5.sqlite`。
 - Claude Code 统计为可选能力；历史 token 来自 `~/.claude/projects/**/*.jsonl`，额度需要本地 statusLine snapshot cache。
 - 从源码构建时需要 Xcode Command Line Tools。
@@ -212,7 +212,7 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 
 ### 支持 Intel Mac 吗？
 
-支持。Intel Mac 下载 `codexU-<version>-mac-x86_64.dmg`。从源码打包时使用 `make release-intel`，或在支持对应 target 的机器上使用 `TARGET_TRIPLE="x86_64-apple-macos14.0"`。
+支持。Intel Mac 下载 `codexU-<version>-mac-x86_64.dmg`。从源码打包时使用 `make release-intel`，或在支持对应 target 的机器上使用 `TARGET_TRIPLE="x86_64-apple-macos13.0"`。
 
 ## License
 

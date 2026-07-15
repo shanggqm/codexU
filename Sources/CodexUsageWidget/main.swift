@@ -86,14 +86,6 @@ struct TokenBreakdown: Equatable, Codable {
             && totalTokens == 0
     }
 
-    var hasNegativeValue: Bool {
-        inputTokens < 0
-            || cachedInputTokens < 0
-            || outputTokens < 0
-            || reasoningOutputTokens < 0
-            || totalTokens < 0
-    }
-
     mutating func add(_ other: TokenBreakdown) {
         inputTokens += other.inputTokens
         cachedInputTokens += other.cachedInputTokens
@@ -1006,8 +998,8 @@ final class UsageStore: ObservableObject {
 
 final class CodexUsageReader {
     private let fileManager = FileManager.default
-    private let localAnalyticsCacheVersion = 7
-    private let sessionUsageCacheVersion = 4
+    private let localAnalyticsCacheVersion = 9
+    private let sessionUsageCacheVersion = 6
     private static let sessionUsageCacheLimit = 1_024
     private static let persistentSessionUsageCacheWriteInterval: TimeInterval = 15 * 60
     private static var sessionUsageCache: [String: SessionUsageCacheEntry] = [:]
@@ -1450,12 +1442,20 @@ final class CodexUsageReader {
             )
         }
 
-        let analytics = readLocalAnalytics(
+        let approximateTodayTokens = int64Value(totalsObject["todayTokens"]) ?? 0
+        let approximateSevenDayTokens = int64Value(totalsObject["sevenDayTokens"]) ?? 0
+        let rawAnalytics = readLocalAnalytics(
             sqlitePath: sqlitePath,
             dbPath: dbPath,
             dayStart: dayStart,
             sevenDayStart: sevenDayStart,
             statistics: context.statistics,
+            messages: &messages
+        )
+        let analytics = validatedLocalAnalytics(
+            rawAnalytics,
+            approximateTodayTokens: approximateTodayTokens,
+            approximateSevenDayTokens: approximateSevenDayTokens,
             messages: &messages
         )
         let allProjects = readAllTimeProjects(sqlitePath: sqlitePath, dbPath: dbPath)
@@ -1468,8 +1468,8 @@ final class CodexUsageReader {
 
         return LocalUsage(
             lifetimeTokens: int64Value(totalsObject["lifetimeTokens"]) ?? 0,
-            todayTokens: int64Value(totalsObject["todayTokens"]) ?? 0,
-            sevenDayTokens: int64Value(totalsObject["sevenDayTokens"]) ?? 0,
+            todayTokens: approximateTodayTokens,
+            sevenDayTokens: approximateSevenDayTokens,
             threadCount: intValue(totalsObject["threadCount"]) ?? 0,
             lastUpdatedAt: dateFromEpoch(totalsObject["lastUpdatedAt"]),
             dailyBuckets: dailyBuckets,
@@ -1484,6 +1484,43 @@ final class CodexUsageReader {
             ),
             projectBoard: projectBoard,
             toolUsages: analytics.toolUsages,
+            skillUsages: analytics.skillUsages
+        )
+    }
+
+    private func validatedLocalAnalytics(
+        _ analytics: LocalAnalytics,
+        approximateTodayTokens: Int64,
+        approximateSevenDayTokens: Int64,
+        messages: inout [String]
+    ) -> LocalAnalytics {
+        guard let detailed = analytics.detailedUsage else { return analytics }
+
+        let suspiciousToday = CodexDetailedUsageSanity.isSuspicious(
+            detailed.today.tokens.visibleTotalTokens,
+            comparedWith: approximateTodayTokens
+        )
+        let suspiciousSevenDay = CodexDetailedUsageSanity.isSuspicious(
+            detailed.sevenDay.tokens.visibleTotalTokens,
+            comparedWith: approximateSevenDayTokens
+        )
+        guard suspiciousToday || suspiciousSevenDay else { return analytics }
+
+        messages.append("Codex token_count 精细统计与本机线程统计差异异常，已回退到线程口径")
+        return LocalAnalytics(
+            detailedUsage: nil,
+            usageTrend: nil,
+            recentProjects: [],
+            toolUsages: analytics.toolUsages.map { usage in
+                ToolUsage(
+                    id: usage.id,
+                    name: usage.name,
+                    category: usage.category,
+                    callCount: usage.callCount,
+                    estimatedTokens: nil,
+                    estimatedCostUSD: nil
+                )
+            },
             skillUsages: analytics.skillUsages
         )
     }
@@ -2029,7 +2066,7 @@ final class CodexUsageReader {
         defer { try? handle.close() }
 
         var buffer = Data()
-        var previous = TokenBreakdown.zero
+        var counterState = CodexTokenCounterState()
         var sawTokenEvent = false
         var tokenEventCount = 0
         var deltas: [SessionUsageDelta] = []
@@ -2053,7 +2090,7 @@ final class CodexUsageReader {
                     customToolCallNeedle: customToolCallNeedle,
                     fractionalFormatter: fractionalFormatter,
                     plainFormatter: plainFormatter,
-                    previous: &previous,
+                    counterState: &counterState,
                     sawTokenEvent: &sawTokenEvent,
                     tokenEventCount: &tokenEventCount,
                     deltas: &deltas,
@@ -2071,7 +2108,7 @@ final class CodexUsageReader {
                 customToolCallNeedle: customToolCallNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
-                previous: &previous,
+                counterState: &counterState,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
                 deltas: &deltas,
@@ -2151,7 +2188,7 @@ final class CodexUsageReader {
         }
 
         var buffer = data
-        var previous = TokenBreakdown.zero
+        var counterState = CodexTokenCounterState()
         var sawTokenEvent = false
         var tokenEventCount = 0
         var deltas: [SessionUsageDelta] = []
@@ -2168,7 +2205,7 @@ final class CodexUsageReader {
                 customToolCallNeedle: customToolCallNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
-                previous: &previous,
+                counterState: &counterState,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
                 deltas: &deltas,
@@ -2185,7 +2222,7 @@ final class CodexUsageReader {
                 customToolCallNeedle: customToolCallNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
-                previous: &previous,
+                counterState: &counterState,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
                 deltas: &deltas,
@@ -2204,7 +2241,7 @@ final class CodexUsageReader {
         customToolCallNeedle: Data,
         fractionalFormatter: ISO8601DateFormatter,
         plainFormatter: ISO8601DateFormatter,
-        previous: inout TokenBreakdown,
+        counterState: inout CodexTokenCounterState,
         sawTokenEvent: inout Bool,
         tokenEventCount: inout Int,
         deltas: inout [SessionUsageDelta],
@@ -2235,28 +2272,25 @@ final class CodexUsageReader {
         guard payloadType == "token_count",
               let timestamp = object["timestamp"] as? String,
               let info = payload["info"] as? [String: Any],
-              let totalUsage = info["total_token_usage"] as? [String: Any],
               let date = fractionalFormatter.date(from: timestamp) ?? plainFormatter.date(from: timestamp)
         else { return }
+
+        let cumulativeSample = (info["total_token_usage"] as? [String: Any]).map { usage in
+            tokenCounterSample(from: usage)
+        }
+        let lastUsageSample = (info["last_token_usage"] as? [String: Any]).map { usage in
+            tokenCounterSample(from: usage)
+        }
+        guard cumulativeSample != nil || lastUsageSample != nil else { return }
 
         sawTokenEvent = true
         tokenEventCount += 1
 
-        let current = TokenBreakdown(
-            inputTokens: int64Value(totalUsage["input_tokens"]) ?? 0,
-            cachedInputTokens: int64Value(totalUsage["cached_input_tokens"]) ?? 0,
-            outputTokens: int64Value(totalUsage["output_tokens"]) ?? 0,
-            reasoningOutputTokens: int64Value(totalUsage["reasoning_output_tokens"]) ?? 0,
-            totalTokens: int64Value(totalUsage["total_tokens"]) ?? 0
-        )
-
-        var delta = current.delta(from: previous)
-        if delta.hasNegativeValue {
-            delta = current
-        }
-        previous = current
-
-        guard !delta.isZero else { return }
+        guard let delta = CodexTokenCounterNormalizer.consume(
+            cumulative: cumulativeSample,
+            lastUsage: lastUsageSample,
+            state: &counterState
+        ) else { return }
         deltas.append(SessionUsageDelta(date: date, tokens: delta))
     }
 
@@ -2575,6 +2609,16 @@ final class CodexUsageReader {
         }
         return components.joined(separator: "|")
     }
+}
+
+private func tokenCounterSample(from usage: [String: Any]) -> CodexTokenCounterSample {
+    CodexTokenCounterSample(
+        inputTokens: int64Value(usage["input_tokens"]),
+        cachedInputTokens: int64Value(usage["cached_input_tokens"]),
+        outputTokens: int64Value(usage["output_tokens"]),
+        reasoningOutputTokens: int64Value(usage["reasoning_output_tokens"]),
+        totalTokens: int64Value(usage["total_tokens"])
+    )
 }
 
 private func skillLoadPaths(in payload: [String: Any]) -> [String] {
@@ -3324,7 +3368,7 @@ struct UsageWidgetView: View {
         .onDisappear {
             store.setTaskBoardSelected(false)
         }
-        .onChange(of: selectedDashboardTab) { _, tab in
+        .onChange(of: selectedDashboardTab) { tab in
             store.setTaskBoardSelected(tab == .tasks)
         }
     }
@@ -4918,18 +4962,18 @@ private struct QuotaRingPresentation: Equatable {
 
     var topology: Topology {
         switch items.count {
-        case 0: .none
-        case 1: .single
-        default: .dual
+        case 0: return .none
+        case 1: return .single
+        default: return .dual
         }
     }
 
     var particleLanes: [QuotaParticleLane] {
         switch topology {
         case .none:
-            []
+            return []
         case .single:
-            items.prefix(1).map {
+            return items.prefix(1).map {
                 QuotaParticleLane(
                     radius: QuotaRingGeometry.outerRadius,
                     progress: $0.particleProgress,
@@ -4938,7 +4982,7 @@ private struct QuotaRingPresentation: Equatable {
                 )
             }
         case .dual:
-            [
+            return [
                 QuotaParticleLane(
                     radius: QuotaRingGeometry.outerRadius,
                     progress: items[0].particleProgress,
@@ -9166,6 +9210,7 @@ final class GlassHostingContainer<Content: View>: NSView {
         host.frame = bounds
         host.autoresizingMask = [.width, .height]
 
+#if compiler(>=6.2) && CODEXU_HAS_LIQUID_GLASS
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: bounds)
             glass.autoresizingMask = [.width, .height]
@@ -9175,17 +9220,24 @@ final class GlassHostingContainer<Content: View>: NSView {
             glass.contentView = host
             addSubview(glass)
         } else {
-            let material = NSVisualEffectView(frame: bounds)
-            material.autoresizingMask = [.width, .height]
-            material.material = .hudWindow
-            material.blendingMode = .behindWindow
-            material.state = .followsWindowActiveState
-            material.wantsLayer = true
-            material.layer?.cornerRadius = cornerRadius
-            material.layer?.masksToBounds = true
-            material.addSubview(host)
-            addSubview(material)
+            installMaterialFallback(host: host)
         }
+#else
+        installMaterialFallback(host: host)
+#endif
+    }
+
+    private func installMaterialFallback(host: NSView) {
+        let material = NSVisualEffectView(frame: bounds)
+        material.autoresizingMask = [.width, .height]
+        material.material = .hudWindow
+        material.blendingMode = .behindWindow
+        material.state = .followsWindowActiveState
+        material.wantsLayer = true
+        material.layer?.cornerRadius = cornerRadius
+        material.layer?.masksToBounds = true
+        material.addSubview(host)
+        addSubview(material)
     }
 
     required init?(coder: NSCoder) {
@@ -9993,6 +10045,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-statistics-time-zone") {
             exit(StatisticsTimeZoneSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-token-counter") {
+            exit(CodexTokenCounterNormalizerSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--dump-json") {
