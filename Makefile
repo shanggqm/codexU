@@ -8,7 +8,7 @@ MACOS_DIR := $(APP_DIR)/Contents/MacOS
 RESOURCES_DIR := $(APP_DIR)/Contents/Resources
 SOURCES := $(shell find Sources/CodexUsageWidget -name '*.swift' | sort)
 APP_ICON := Resources/codexU.icns
-DEPLOYMENT_TARGET ?= 14.0
+DEPLOYMENT_TARGET ?= 13.0
 HOST_ARCH := $(shell uname -m)
 APPLE_SILICON_TARGET_TRIPLE ?= arm64-apple-macos$(DEPLOYMENT_TARGET)
 INTEL_TARGET_TRIPLE ?= x86_64-apple-macos$(DEPLOYMENT_TARGET)
@@ -19,6 +19,12 @@ DMG_PATH := $(DIST_DIR)/$(DMG_NAME)
 SIGN_IDENTITY ?= -
 CODESIGN_EXTRA_FLAGS ?=
 SWIFTC_TARGET_FLAGS := -target $(TARGET_TRIPLE)
+MACOS_SDK_MAJOR := $(shell xcrun --sdk macosx --show-sdk-version 2>/dev/null | cut -d. -f1)
+SWIFTC_FEATURE_FLAGS :=
+
+ifeq ($(shell test "$(MACOS_SDK_MAJOR)" -ge 26 2>/dev/null && echo yes),yes)
+SWIFTC_FEATURE_FLAGS += -D CODEXU_HAS_LIQUID_GLASS
+endif
 
 ifeq ($(SIGN_IDENTITY),-)
 CODESIGN_FLAGS := --force --deep --sign -
@@ -26,7 +32,7 @@ else
 CODESIGN_FLAGS := --force --deep --options runtime --timestamp --sign "$(SIGN_IDENTITY)" $(CODESIGN_EXTRA_FLAGS)
 endif
 
-.PHONY: build run probe test-rate-limits test-statistics-time-zone test-particle-animation install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
+.PHONY: build run probe test-rate-limits test-statistics-time-zone test-particle-animation test-macos-compatibility install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
 
 build:
 	rm -rf "$(APP_DIR)"
@@ -35,7 +41,7 @@ build:
 	cp "$(APP_ICON)" "$(RESOURCES_DIR)/"
 	cp Resources/*.png "$(RESOURCES_DIR)/"
 	/usr/bin/xattr -dr com.apple.quarantine "$(APP_DIR)" 2>/dev/null || true
-	MACOSX_DEPLOYMENT_TARGET="$(DEPLOYMENT_TARGET)" swiftc -O -parse-as-library $(SWIFTC_TARGET_FLAGS) $(SOURCES) \
+	MACOSX_DEPLOYMENT_TARGET="$(DEPLOYMENT_TARGET)" swiftc -O -parse-as-library $(SWIFTC_TARGET_FLAGS) $(SWIFTC_FEATURE_FLAGS) $(SOURCES) \
 		-o "$(MACOS_DIR)/$(APP_NAME)" \
 		-framework Cocoa \
 		-framework Carbon \
@@ -54,6 +60,9 @@ test-rate-limits:
 
 test-statistics-time-zone:
 	./scripts/test-statistics-time-zone.sh
+
+test-macos-compatibility:
+	./scripts/test-macos-compatibility.sh
 
 test-particle-animation:
 	./scripts/test-particle-animation.sh

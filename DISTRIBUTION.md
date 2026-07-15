@@ -4,7 +4,7 @@ This app is distributed outside the Mac App Store as a downloadable DMG.
 
 ## Supported targets
 
-- macOS 14 or later.
+- macOS 13 or later.
 - Apple Silicon Macs with the `arm64` DMG.
 - Intel Macs with the `x86_64` DMG.
 - `make release` builds the current host architecture by default. Use the explicit architecture targets below when preparing GitHub Release artifacts.
@@ -54,7 +54,7 @@ make release-all
 You can still override the target triple directly when needed:
 
 ```sh
-make clean release TARGET_TRIPLE="x86_64-apple-macos14.0"
+make clean release TARGET_TRIPLE="x86_64-apple-macos13.0"
 ```
 
 ## Release DMG with checksum

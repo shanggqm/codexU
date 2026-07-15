@@ -3197,7 +3197,7 @@ struct UsageWidgetView: View {
         .onDisappear {
             store.setTaskBoardSelected(false)
         }
-        .onChange(of: selectedDashboardTab) { _, tab in
+        .onChange(of: selectedDashboardTab) { tab in
             store.setTaskBoardSelected(tab == .tasks)
         }
     }
@@ -4513,29 +4513,29 @@ private enum QuotaWindowKind: String, Hashable {
 
     var compactTitle: String {
         switch self {
-        case .fiveHour: "5h"
-        case .sevenDay: "7d"
+        case .fiveHour: return "5h"
+        case .sevenDay: return "7d"
         }
     }
 
     var startColor: RingRGBColor {
         switch self {
-        case .fiveHour: quotaPrimaryStartColor
-        case .sevenDay: quotaSecondaryStartColor
+        case .fiveHour: return quotaPrimaryStartColor
+        case .sevenDay: return quotaSecondaryStartColor
         }
     }
 
     var endColor: RingRGBColor {
         switch self {
-        case .fiveHour: quotaPrimaryEndColor
-        case .sevenDay: quotaSecondaryEndColor
+        case .fiveHour: return quotaPrimaryEndColor
+        case .sevenDay: return quotaSecondaryEndColor
         }
     }
 
     var color: Color {
         switch self {
-        case .fiveHour: quotaPrimaryColor
-        case .sevenDay: quotaSecondaryColor
+        case .fiveHour: return quotaPrimaryColor
+        case .sevenDay: return quotaSecondaryColor
         }
     }
 }
@@ -4585,18 +4585,18 @@ private struct QuotaRingPresentation: Equatable {
 
     var topology: Topology {
         switch items.count {
-        case 0: .none
-        case 1: .single
-        default: .dual
+        case 0: return .none
+        case 1: return .single
+        default: return .dual
         }
     }
 
     var particleLanes: [QuotaParticleLane] {
         switch topology {
         case .none:
-            []
+            return []
         case .single:
-            items.prefix(1).map {
+            return items.prefix(1).map {
                 QuotaParticleLane(
                     radius: QuotaRingGeometry.outerRadius,
                     progress: $0.particleProgress,
@@ -4605,7 +4605,7 @@ private struct QuotaRingPresentation: Equatable {
                 )
             }
         case .dual:
-            [
+            return [
                 QuotaParticleLane(
                     radius: QuotaRingGeometry.outerRadius,
                     progress: items[0].particleProgress,
@@ -8743,6 +8743,7 @@ final class GlassHostingContainer<Content: View>: NSView {
         host.frame = bounds
         host.autoresizingMask = [.width, .height]
 
+#if compiler(>=6.2) && CODEXU_HAS_LIQUID_GLASS
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: bounds)
             glass.autoresizingMask = [.width, .height]
@@ -8752,17 +8753,24 @@ final class GlassHostingContainer<Content: View>: NSView {
             glass.contentView = host
             addSubview(glass)
         } else {
-            let material = NSVisualEffectView(frame: bounds)
-            material.autoresizingMask = [.width, .height]
-            material.material = .hudWindow
-            material.blendingMode = .behindWindow
-            material.state = .followsWindowActiveState
-            material.wantsLayer = true
-            material.layer?.cornerRadius = cornerRadius
-            material.layer?.masksToBounds = true
-            material.addSubview(host)
-            addSubview(material)
+            installMaterialFallback(host: host)
         }
+#else
+        installMaterialFallback(host: host)
+#endif
+    }
+
+    private func installMaterialFallback(host: NSView) {
+        let material = NSVisualEffectView(frame: bounds)
+        material.autoresizingMask = [.width, .height]
+        material.material = .hudWindow
+        material.blendingMode = .behindWindow
+        material.state = .followsWindowActiveState
+        material.wantsLayer = true
+        material.layer?.cornerRadius = cornerRadius
+        material.layer?.masksToBounds = true
+        material.addSubview(host)
+        addSubview(material)
     }
 
     required init?(coder: NSCoder) {

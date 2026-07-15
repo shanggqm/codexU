@@ -81,7 +81,7 @@ After installation, codexU checks GitHub Releases for new versions at most once 
 
 ## Requirements
 
-- macOS 14 or later.
+- macOS 13 or later.
 - A local Codex installation.
 - A signed-in Codex account for quota data.
 - Codex must have been used at least once so `~/.codex/state_5.sqlite` exists.
@@ -169,7 +169,7 @@ The current local Codex API exposes rolling-window usage percentages and reset t
 
 ### Does codexU support Intel Macs?
 
-Yes. Intel Macs should use `codexU-<version>-mac-x86_64.dmg`. From source, package it with `make release-intel`, or override `TARGET_TRIPLE="x86_64-apple-macos14.0"` from a compatible toolchain.
+Yes. Intel Macs should use `codexU-<version>-mac-x86_64.dmg`. From source, package it with `make release-intel`, or override `TARGET_TRIPLE="x86_64-apple-macos13.0"` from a compatible toolchain.
 
 ## License
 
