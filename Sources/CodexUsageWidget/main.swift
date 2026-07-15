@@ -8743,7 +8743,7 @@ final class GlassHostingContainer<Content: View>: NSView {
         host.frame = bounds
         host.autoresizingMask = [.width, .height]
 
-#if compiler(>=6.2)
+#if compiler(>=6.2) && CODEXU_HAS_LIQUID_GLASS
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: bounds)
             glass.autoresizingMask = [.width, .height]
@@ -8753,29 +8753,24 @@ final class GlassHostingContainer<Content: View>: NSView {
             glass.contentView = host
             addSubview(glass)
         } else {
-            let material = NSVisualEffectView(frame: bounds)
-            material.autoresizingMask = [.width, .height]
-            material.material = .hudWindow
-            material.blendingMode = .behindWindow
-            material.state = .followsWindowActiveState
-            material.wantsLayer = true
-            material.layer?.cornerRadius = cornerRadius
-            material.layer?.masksToBounds = true
-            material.addSubview(host)
-            addSubview(material)
+            installMaterialFallback(host: host)
         }
 #else
+        installMaterialFallback(host: host)
+#endif
+    }
+
+    private func installMaterialFallback(host: NSView) {
         let material = NSVisualEffectView(frame: bounds)
         material.autoresizingMask = [.width, .height]
         material.material = .hudWindow
         material.blendingMode = .behindWindow
-        material.state = .active
+        material.state = .followsWindowActiveState
         material.wantsLayer = true
         material.layer?.cornerRadius = cornerRadius
         material.layer?.masksToBounds = true
         material.addSubview(host)
         addSubview(material)
-#endif
     }
 
     required init?(coder: NSCoder) {

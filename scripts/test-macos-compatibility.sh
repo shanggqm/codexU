@@ -40,6 +40,8 @@ check_equal "Makefile deployment target" "$make_target" "$EXPECTED_TARGET"
 check_equal "Info.plist minimum system version" "$plist_target" "$EXPECTED_TARGET"
 check_contains Makefile 'APPLE_SILICON_TARGET_TRIPLE ?= arm64-apple-macos$(DEPLOYMENT_TARGET)'
 check_contains Makefile 'INTEL_TARGET_TRIPLE ?= x86_64-apple-macos$(DEPLOYMENT_TARGET)'
+check_contains Makefile 'SWIFTC_FEATURE_FLAGS += -D CODEXU_HAS_LIQUID_GLASS'
+check_contains Sources/CodexUsageWidget/main.swift '#if compiler(>=6.2) && CODEXU_HAS_LIQUID_GLASS'
 check_contains README.md '- macOS 13 或更新版本。'
 check_contains README.md 'TARGET_TRIPLE="x86_64-apple-macos13.0"'
 check_contains README.en.md '- macOS 13 or later.'
