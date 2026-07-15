@@ -1,7 +1,7 @@
 # codexU
 
 > [!IMPORTANT]
-> **Upgrade to v1.0.1 or later.** After Codex was integrated into the ChatGPT desktop app, the macOS app was renamed from `Codex.app` to `ChatGPT.app`. Older codexU versions still look for the previous path, which can prevent quota and usage data from loading. v1.0.1 supports the new app name while retaining legacy-path and standard CLI fallbacks. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
+> **Upgrade to v1.0.5 or later.** v1.0.5 adapts the quota rings and menu bar layout to the windows Codex actually returns, preserves the full particle experience while rendering it only for a frontmost focused window, and further reduces background polling and avoidable Claude Code cache work. It retains support for ChatGPT.app, legacy Codex.app paths, and the standard CLI. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
 
 codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT Codex and Claude Code quota, token usage, and today's task status. It keeps the information you check most in the menu bar and main window, so you can quickly see remaining quota, reset times, and daily work progress.
 
@@ -16,9 +16,10 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 
 ## Features
 
-- Shows remaining and used Codex quota for the 5-hour and 7-day windows, including reset times.
+- Shows remaining and used Codex quota for the 5-hour and 7-day windows, including reset times; quota types are classified by their protocol-reported durations and trusted responses automatically select a single- or dual-quota layout.
 - Adds a menu bar runtime menu with separate Codex and Claude Code cards, 5-hour/7-day remaining quota, today's token usage, and total tokens today.
-- Offers transparent Minimal, Classic, and Rich menu bar modes: Minimal keeps only thicker concentric 5h/7d rings, Classic keeps only the quota number inside each progress ring, and Rich keeps full labels, bars, and reset times.
+- Offers transparent Minimal, Classic, and Rich menu bar modes: Minimal keeps thicker quota rings, Classic keeps the quota number inside each progress ring, and Rich keeps full labels, bars, and reset times. A single active window automatically collapses to a single-quota layout.
+- Preserves the full ring particle effect while rendering it only when the main window is visible, frontmost, and focused by default. Power Saving mode renders particles only while the ring is hovered, and animation stops in the background or under Low Power, thermal, and Reduce Motion constraints.
 - Lets you switch menu bar quotas between used and remaining, choose 5-hour, 7-day, today tokens, and reset countdown, and keeps 5h/7d progress colors aligned with the main blue-purple quota rings.
 - Uses progress direction instead of extra labels: used runs clockwise/left-to-right, while remaining runs counterclockwise/right-to-left.
 - Uses monochrome templates derived exactly from the original Runtime logos and resolves icon/text colors from the menu bar's effective appearance; branded color icons remain in the main window and popover.
@@ -128,10 +129,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-1.0.3-mac-arm64.dmg
-dist/codexU-1.0.3-mac-arm64.dmg.sha256
-dist/codexU-1.0.3-mac-x86_64.dmg
-dist/codexU-1.0.3-mac-x86_64.dmg.sha256
+dist/codexU-1.0.5-mac-arm64.dmg
+dist/codexU-1.0.5-mac-arm64.dmg.sha256
+dist/codexU-1.0.5-mac-x86_64.dmg
+dist/codexU-1.0.5-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).

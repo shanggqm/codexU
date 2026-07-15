@@ -37,6 +37,17 @@ private enum StatusItemTextOpacity {
 }
 
 struct StatusItemRenderer {
+    private static let resetCountdownTemplate: NSImage? = {
+        let configuration = NSImage.SymbolConfiguration(
+            pointSize: StatusItemLayoutMetrics.richResetIconSide,
+            weight: .semibold
+        )
+        return NSImage(
+            systemSymbolName: "arrow.clockwise",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(configuration)
+    }()
+
     func render(
         _ presentation: StatusItemPresentation,
         appearance: NSAppearance? = nil
@@ -75,6 +86,17 @@ struct StatusItemRenderer {
     }
 
     private func drawMinimal(_ presentation: StatusItemPresentation) {
+        if presentation.showsNoActiveQuota {
+            drawNoActiveQuota(
+                in: NSRect(
+                    x: 0,
+                    y: 1,
+                    width: StatusItemLayoutMetrics.minimalImageWidth,
+                    height: 20
+                )
+            )
+            return
+        }
         let quotaMetrics = presentation.quotaMetrics
 
         for (index, metric) in quotaMetrics.prefix(2).enumerated() {
@@ -100,6 +122,11 @@ struct StatusItemRenderer {
     private func drawClassic(_ presentation: StatusItemPresentation) {
         drawRuntimeLogo(presentation.runtime, in: NSRect(x: 2, y: 2, width: 18, height: 18))
         var x = StatusItemLayoutMetrics.leadingContentWidth
+
+        if presentation.showsNoActiveQuota {
+            drawNoActiveQuota(in: NSRect(x: x, y: 1, width: 22, height: 20))
+            x += StatusItemLayoutMetrics.classicQuotaUnitWidth
+        }
 
         for metric in presentation.quotaMetrics {
             let ringRect = NSRect(x: x + 1, y: 1, width: 20, height: 20)
@@ -129,6 +156,10 @@ struct StatusItemRenderer {
         drawRuntimeLogo(presentation.runtime, in: NSRect(x: 2, y: 2, width: 18, height: 18))
         let quotaMetrics = presentation.quotaMetrics
 
+        if presentation.showsNoActiveQuota {
+            drawNoActiveQuota(in: NSRect(x: 22, y: 1, width: 74, height: 20))
+        }
+
         if quotaMetrics.count >= 2 {
             drawRichQuotaRow(
                 quotaMetrics[0],
@@ -143,9 +174,8 @@ struct StatusItemRenderer {
                 quotaMode: presentation.quotaMode
             )
         } else if let metric = quotaMetrics.first {
-            drawRichQuotaRow(
+            drawRichSingleQuota(
                 metric,
-                y: 6.2,
                 showsReset: presentation.showsResetCountdown,
                 quotaMode: presentation.quotaMode
             )
@@ -153,7 +183,11 @@ struct StatusItemRenderer {
 
         guard let today = presentation.todayMetric else { return }
         let tokenX: CGFloat
-        if quotaMetrics.isEmpty {
+        if presentation.showsNoActiveQuota {
+            tokenX = StatusItemLayoutMetrics.richQuotaWidthWithoutReset
+            NSColor.separatorColor.withAlphaComponent(0.36).setFill()
+            NSBezierPath(rect: NSRect(x: tokenX - 1, y: 4, width: 1, height: 14)).fill()
+        } else if quotaMetrics.isEmpty {
             tokenX = StatusItemLayoutMetrics.leadingContentWidth
         } else {
             tokenX = presentation.showsResetCountdown
@@ -163,6 +197,71 @@ struct StatusItemRenderer {
             NSBezierPath(rect: NSRect(x: tokenX - 1, y: 4, width: 1, height: 14)).fill()
         }
         drawCompactToken(today, x: tokenX, width: StatusItemLayoutMetrics.richTokenExtensionWidth)
+    }
+
+    private func drawNoActiveQuota(in rect: NSRect) {
+        drawText(
+            "∞",
+            in: rect,
+            font: .systemFont(ofSize: 13, weight: .semibold),
+            color: secondaryTextColor,
+            alignment: .center
+        )
+    }
+
+    private func drawRichSingleQuota(
+        _ metric: StatusItemMetricPresentation,
+        showsReset: Bool,
+        quotaMode: QuotaDisplayMode
+    ) {
+        drawText(
+            metric.label,
+            in: NSRect(x: 22, y: 5.2, width: 17, height: 11),
+            font: .monospacedDigitSystemFont(ofSize: 8.2, weight: .semibold),
+            color: metric.isAvailable ? secondaryTextColor : mutedTextColor,
+            alignment: .right
+        )
+
+        let barRect = StatusItemLayoutMetrics.richSingleQuotaBarRect
+        let fillPath = drawLinearProgress(
+            in: barRect,
+            fraction: metric.fraction,
+            role: metric.paletteRole,
+            quotaMode: quotaMode
+        )
+        let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 8.6, weight: .bold)
+        let valueColor = metric.isAvailable ? primaryTextColor : mutedTextColor
+        drawText(
+            metric.value,
+            in: NSRect(x: barRect.minX, y: 5.2, width: barRect.width, height: 11),
+            font: valueFont,
+            color: valueColor,
+            alignment: .center
+        )
+
+        // The progress palette is appearance-independent. Repaint the part of
+        // the label over the filled segment with dark ink, while the unfilled
+        // part keeps the system label color. This remains legible in both Aqua
+        // appearances and when the progress boundary crosses the glyphs.
+        if metric.isAvailable, let fillPath {
+            NSGraphicsContext.saveGraphicsState()
+            fillPath.addClip()
+            drawText(
+                metric.value,
+                in: NSRect(x: barRect.minX, y: 5.2, width: barRect.width, height: 11),
+                font: valueFont,
+                color: NSColor.black.withAlphaComponent(0.88),
+                alignment: .center
+            )
+            NSGraphicsContext.restoreGraphicsState()
+        }
+
+        if showsReset, let resetText = metric.resetText {
+            drawResetCountdown(
+                resetText,
+                in: StatusItemLayoutMetrics.richSingleQuotaResetRect
+            )
+        }
     }
 
     private func drawRichQuotaRow(
@@ -191,15 +290,68 @@ struct StatusItemRenderer {
             color: metric.isAvailable ? primaryTextColor : mutedTextColor,
             alignment: .right
         )
-        if showsReset {
-            drawText(
-                metric.resetText ?? "--",
-                in: NSRect(x: 98, y: y - 1, width: 15, height: 11),
-                font: .monospacedDigitSystemFont(ofSize: 7.7, weight: .medium),
-                color: secondaryTextColor,
-                alignment: .left
+        if showsReset, let resetText = metric.resetText {
+            drawResetCountdown(
+                resetText,
+                in: NSRect(
+                    x: StatusItemLayoutMetrics.richSingleQuotaResetRect.minX,
+                    y: y - 1,
+                    width: StatusItemLayoutMetrics.richSingleQuotaResetRect.width,
+                    height: 11
+                )
             )
         }
+    }
+
+    private func drawResetCountdown(_ text: String, in rect: NSRect) {
+        let font = NSFont.monospacedDigitSystemFont(
+            ofSize: StatusItemLayoutMetrics.richResetFontSize,
+            weight: .medium
+        )
+        let textWidth = ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        let iconSide = StatusItemLayoutMetrics.richResetIconSide
+        let spacing = StatusItemLayoutMetrics.richResetIconTextSpacing
+
+        guard let template = Self.resetCountdownTemplate else {
+            drawText(
+                "↻\(text)",
+                in: rect,
+                font: font,
+                color: secondaryTextColor,
+                alignment: .center
+            )
+            return
+        }
+
+        let contentWidth = StatusItemLayoutMetrics.richResetContentWidth(for: text)
+        let startX = rect.midX - contentWidth / 2
+        tintedImage(
+            template,
+            color: secondaryTextColor,
+            size: NSSize(width: iconSide, height: iconSide)
+        ).draw(
+            in: NSRect(
+                x: startX,
+                y: rect.midY - iconSide / 2,
+                width: iconSide,
+                height: iconSide
+            ),
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1
+        )
+        drawText(
+            text,
+            in: NSRect(
+                x: startX + iconSide + spacing,
+                y: rect.midY - 5.5,
+                width: textWidth,
+                height: 11
+            ),
+            font: font,
+            color: secondaryTextColor,
+            alignment: .center
+        )
     }
 
     private func drawCompactToken(
@@ -284,21 +436,28 @@ struct StatusItemRenderer {
         )
     }
 
+    @discardableResult
     private func drawLinearProgress(
         in rect: NSRect,
         fraction: CGFloat?,
         role: StatusItemQuotaPaletteRole?,
         quotaMode: QuotaDisplayMode
-    ) {
+    ) -> NSBezierPath? {
         trackColor.setFill()
         NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2).fill()
 
-        guard let fraction else { return }
+        guard let fraction else { return nil }
         let progress = max(0, min(1, fraction))
-        guard progress > 0.001 else { return }
-        let fillWidth = max(rect.height, rect.width * progress)
+        guard progress > 0.001 else { return nil }
+        let fillWidth = max(0.5, rect.width * progress)
         let fillX = quotaMode.startsAtLeadingEdge ? rect.minX : rect.maxX - fillWidth
         let fillRect = NSRect(x: fillX, y: rect.minY, width: fillWidth, height: rect.height)
+        let fillRadius = min(rect.height / 2, fillWidth / 2)
+        let fillPath = NSBezierPath(
+            roundedRect: fillRect,
+            xRadius: fillRadius,
+            yRadius: fillRadius
+        )
         let palette = StatusItemQuotaPalette.palette(for: role)
         guard let context = NSGraphicsContext.current?.cgContext,
               let gradient = CGGradient(
@@ -308,12 +467,12 @@ struct StatusItemRenderer {
               )
         else {
             palette.end.setFill()
-            NSBezierPath(roundedRect: fillRect, xRadius: rect.height / 2, yRadius: rect.height / 2).fill()
-            return
+            fillPath.fill()
+            return fillPath
         }
 
         context.saveGState()
-        NSBezierPath(roundedRect: fillRect, xRadius: rect.height / 2, yRadius: rect.height / 2).addClip()
+        fillPath.addClip()
         context.drawLinearGradient(
             gradient,
             start: CGPoint(
@@ -327,6 +486,7 @@ struct StatusItemRenderer {
             options: []
         )
         context.restoreGState()
+        return fillPath
     }
 
     private func drawArcCap(

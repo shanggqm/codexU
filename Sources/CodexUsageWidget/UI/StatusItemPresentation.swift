@@ -7,6 +7,7 @@ enum StatusItemQuotaPaletteRole: Equatable {
 
 struct StatusItemSourceSnapshot: Equatable {
     let runtime: RuntimeScope
+    let status: RuntimeMenuStatus
     let fiveHourRemainingPercent: Double?
     let fiveHourResetsAt: Date?
     let sevenDayRemainingPercent: Double?
@@ -15,6 +16,7 @@ struct StatusItemSourceSnapshot: Equatable {
 
     init(summary: RuntimeMenuSummary) {
         runtime = summary.scope
+        status = summary.status
         fiveHourRemainingPercent = summary.fiveHourRemainingPercent
         fiveHourResetsAt = summary.fiveHourResetsAt
         sevenDayRemainingPercent = summary.sevenDayRemainingPercent
@@ -25,6 +27,7 @@ struct StatusItemSourceSnapshot: Equatable {
     static func unavailable(runtime: RuntimeScope) -> StatusItemSourceSnapshot {
         StatusItemSourceSnapshot(
             runtime: runtime,
+            status: .unavailable,
             fiveHourRemainingPercent: nil,
             fiveHourResetsAt: nil,
             sevenDayRemainingPercent: nil,
@@ -35,6 +38,7 @@ struct StatusItemSourceSnapshot: Equatable {
 
     init(
         runtime: RuntimeScope,
+        status: RuntimeMenuStatus = .available,
         fiveHourRemainingPercent: Double?,
         fiveHourResetsAt: Date?,
         sevenDayRemainingPercent: Double?,
@@ -42,6 +46,7 @@ struct StatusItemSourceSnapshot: Equatable {
         todayTokens: Int64?
     ) {
         self.runtime = runtime
+        self.status = status
         self.fiveHourRemainingPercent = fiveHourRemainingPercent
         self.fiveHourResetsAt = fiveHourResetsAt
         self.sevenDayRemainingPercent = sevenDayRemainingPercent
@@ -71,6 +76,7 @@ struct StatusItemPresentation: Equatable {
     let runtime: RuntimeScope
     let imageSize: NSSize
     let itemLength: CGFloat
+    let showsNoActiveQuota: Bool
     let metrics: [StatusItemMetricPresentation]
     let tooltip: String
     let accessibilityValue: String
@@ -96,11 +102,22 @@ enum StatusItemLayoutMetrics {
     static let leadingContentWidth: CGFloat = 22
     static let classicQuotaUnitWidth: CGFloat = 23
     static let classicTokenUnitWidth: CGFloat = 54
-    static let richQuotaWidthWithReset: CGFloat = 116
+    static let richQuotaWidthWithReset: CGFloat = 126
     static let richQuotaWidthWithoutReset: CGFloat = 98
     static let richTokenOnlyWidth: CGFloat = 70
     static let richTokenExtensionWidth: CGFloat = 54
+    static let richSingleQuotaBarRect = NSRect(x: 45, y: 4.5, width: 49, height: 13)
+    static let richSingleQuotaResetRect = NSRect(x: 96, y: 4.5, width: 28, height: 13)
+    static let richResetIconSide: CGFloat = 7
+    static let richResetIconTextSpacing: CGFloat = 0.75
+    static let richResetFontSize: CGFloat = 8.2
     static let todayTokenFontSize: CGFloat = NSFont.systemFontSize
+
+    static func richResetContentWidth(for text: String) -> CGFloat {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: richResetFontSize, weight: .medium)
+        let textWidth = ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        return richResetIconSide + richResetIconTextSpacing + textWidth
+    }
 
     static var minimalOuterRingRect: NSRect {
         centeredMinimalRect(side: minimalOuterRingDiameter)
@@ -119,23 +136,27 @@ enum StatusItemLayoutMetrics {
         )
     }
 
-    static func imageWidth(for preferences: StatusItemPreferences) -> CGFloat {
+    static func imageWidth(
+        for preferences: StatusItemPreferences,
+        metrics: [StatusItemMetricPresentation],
+        showsNoActiveQuota: Bool
+    ) -> CGFloat {
         let normalized = preferences.normalized()
-        let quotaCount = normalized.visibleMetrics.filter(\.isQuota).count
-        let showsToday = normalized.visibleMetrics.contains(.todayTokens)
+        let quotaCount = metrics.filter(\.isQuota).count
+        let showsToday = metrics.contains { $0.metric == .todayTokens }
 
         switch normalized.displayMode {
         case .minimal:
             return minimalImageWidth
         case .classic:
             return leadingContentWidth
-                + CGFloat(quotaCount) * classicQuotaUnitWidth
+                + CGFloat(quotaCount + (showsNoActiveQuota ? 1 : 0)) * classicQuotaUnitWidth
                 + (showsToday ? classicTokenUnitWidth : 0)
                 + 2
         case .rich:
-            if quotaCount > 0 {
+            if quotaCount > 0 || showsNoActiveQuota {
                 let quotaWidth = normalized.showsResetCountdown
-                    ? richQuotaWidthWithReset
+                    && !showsNoActiveQuota ? richQuotaWidthWithReset
                     : richQuotaWidthWithoutReset
                 return quotaWidth + (showsToday ? richTokenExtensionWidth : 0)
             }
@@ -153,7 +174,7 @@ struct StatusItemPresentationBuilder {
         now: Date = Date()
     ) -> StatusItemPresentation {
         let preferences = preferences.normalized()
-        let metrics = preferences.orderedVisibleMetrics.map { metric in
+        let configuredMetrics = preferences.orderedVisibleMetrics.map { metric in
             makeMetric(
                 metric,
                 source: source,
@@ -162,11 +183,35 @@ struct StatusItemPresentationBuilder {
                 now: now
             )
         }
-        let imageWidth = StatusItemLayoutMetrics.imageWidth(for: preferences)
+        let availableQuotaMetrics = [StatusItemMetric.fiveHourQuota, .sevenDayQuota]
+            .map { metric in
+                makeMetric(
+                    metric,
+                    source: source,
+                    preferences: preferences,
+                    language: language,
+                    now: now
+                )
+            }
+            .filter(\.isAvailable)
+        let showsNoActiveQuota = source.status == .available
+            && availableQuotaMetrics.isEmpty
+            && preferences.hasVisibleQuota
+        let metrics = effectiveMetrics(
+            from: configuredMetrics,
+            availableQuotaMetrics: availableQuotaMetrics,
+            sourceStatus: source.status
+        )
+        let imageWidth = StatusItemLayoutMetrics.imageWidth(
+            for: preferences,
+            metrics: metrics,
+            showsNoActiveQuota: showsNoActiveQuota
+        )
         let description = accessibilityDescription(
             source: source,
             preferences: preferences,
             metrics: metrics,
+            showsNoActiveQuota: showsNoActiveQuota,
             language: language
         )
         let action: String
@@ -186,10 +231,41 @@ struct StatusItemPresentationBuilder {
             runtime: source.runtime,
             imageSize: NSSize(width: imageWidth, height: StatusItemLayoutMetrics.imageHeight),
             itemLength: imageWidth + StatusItemLayoutMetrics.itemOuterPadding,
+            showsNoActiveQuota: showsNoActiveQuota,
             metrics: metrics,
             tooltip: "codexU · \(description) · \(action)",
             accessibilityValue: description
         )
+    }
+
+    /// Preferences remain persistent, while the rendered set follows the last
+    /// authoritative quota topology. If every selected quota has disappeared,
+    /// temporarily show the first real quota instead of leaving an empty item.
+    private func effectiveMetrics(
+        from configuredMetrics: [StatusItemMetricPresentation],
+        availableQuotaMetrics: [StatusItemMetricPresentation],
+        sourceStatus: RuntimeMenuStatus
+    ) -> [StatusItemMetricPresentation] {
+        guard sourceStatus == .available || sourceStatus == .stale else {
+            return configuredMetrics
+        }
+
+        if availableQuotaMetrics.isEmpty {
+            return sourceStatus == .available
+                ? configuredMetrics.filter { !$0.isQuota }
+                : configuredMetrics
+        }
+
+        let configuredAvailable = configuredMetrics.filter { metric in
+            !metric.isQuota || metric.isAvailable
+        }
+        if configuredAvailable.contains(where: \.isQuota) {
+            return configuredAvailable
+        }
+        guard configuredMetrics.contains(where: \.isQuota),
+              let fallbackQuota = availableQuotaMetrics.first
+        else { return configuredAvailable }
+        return [fallbackQuota] + configuredAvailable
     }
 
     private func makeMetric(
@@ -272,6 +348,7 @@ struct StatusItemPresentationBuilder {
         source: StatusItemSourceSnapshot,
         preferences: StatusItemPreferences,
         metrics: [StatusItemMetricPresentation],
+        showsNoActiveQuota: Bool,
         language: WidgetLanguage
     ) -> String {
         let quotaTerm = preferences.quotaMode == .remaining
@@ -280,17 +357,73 @@ struct StatusItemPresentationBuilder {
         let unavailable = language.text("不可用", "unavailable")
         let noRecords = language.text("暂无记录", "no records")
 
-        let values = metrics.map { metric -> String in
+        var values: [String] = []
+        if source.status == .stale {
+            values.append(language.text("额度快照已过期", "quota snapshot stale"))
+        }
+        if showsNoActiveQuota {
+            values.append(language.text("当前无额度限制", "no active quota limits"))
+        }
+        values += metrics.map { metric -> String in
             switch metric.metric {
             case .fiveHourQuota, .sevenDayQuota:
                 let value = metric.isAvailable ? metric.value : unavailable
-                return "\(metric.label) \(quotaTerm) \(value)"
+                let quotaName: String
+                switch metric.metric {
+                case .fiveHourQuota:
+                    quotaName = language.text("5 小时额度", "5-hour quota")
+                case .sevenDayQuota:
+                    quotaName = language.text("7 天额度", "7-day quota")
+                case .todayTokens:
+                    quotaName = metric.label
+                }
+                var description = "\(quotaName) \(quotaTerm) \(value)"
+                if let resetText = metric.resetText {
+                    let resetDescription = localizedResetCountdown(resetText, language: language)
+                    description += language.text(
+                        "，\(resetDescription)",
+                        ", \(resetDescription)"
+                    )
+                }
+                return description
             case .todayTokens:
                 let value = metric.isAvailable ? metric.value : noRecords
                 return language.text("今日 token \(value)", "today tokens \(value)")
             }
         }
         return ([source.runtime.displayName] + values).joined(separator: " · ")
+    }
+
+    private func localizedResetCountdown(_ compact: String, language: WidgetLanguage) -> String {
+        guard let unit = compact.last,
+              let amount = Int(compact.dropLast())
+        else {
+            return language.text("\(compact) 后重置", "resets in \(compact)")
+        }
+
+        if unit == "m", amount == 0 {
+            return language.text("即将重置", "resets soon")
+        }
+
+        switch unit {
+        case "d":
+            return language.text(
+                "\(amount) 天后重置",
+                "resets in \(amount) \(amount == 1 ? "day" : "days")"
+            )
+        case "h":
+            return language.text(
+                "\(amount) 小时后重置",
+                "resets in \(amount) \(amount == 1 ? "hour" : "hours")"
+            )
+        case "m":
+            return language.text(
+                "\(amount) 分钟后重置",
+                "resets in \(amount) \(amount == 1 ? "minute" : "minutes")"
+            )
+        default:
+            return language.text("\(compact) 后重置", "resets in \(compact)")
+        }
     }
 
     private func formatResetCountdown(_ date: Date?, now: Date) -> String? {

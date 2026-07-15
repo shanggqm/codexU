@@ -1,9 +1,9 @@
 # codexU
 
 > [!IMPORTANT]
-> **建议升级到 v1.0.1 或更高版本。** Codex 与 ChatGPT 合并升级后，macOS 应用由 `Codex.app` 更名为 `ChatGPT.app`。旧版 codexU 仍按旧路径查找 Codex，可能导致额度和用量读取失败；v1.0.1 已兼容新应用名称，并保留旧版路径与标准 CLI 回退。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
+> **建议升级到 v1.0.5 或更高版本。** v1.0.5 会按 Codex 实际返回的额度窗口自适应单环/双环和菜单栏布局，保留完整粒子体验但只在窗口置前聚焦时渲染，并进一步减少后台轮询、异常额度响应和 Claude Code 缓存带来的资源与可靠性问题；同时继续兼容 ChatGPT.app、旧版 Codex.app 与标准 CLI 路径。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
 
-[English](README.en.md)
+[产品官网](https://shanggqm.github.io/codexU-site/) · [下载最新版本](https://github.com/shanggqm/codexU/releases/latest) · [English](README.en.md)
 
 codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / ChatGPT Codex 和 Claude Code 的额度窗口、token 用量和今日任务状态。它把常用信息放在菜单栏和主窗口里，帮助你快速判断剩余额度、重置时间和当天工作进展。
 
@@ -28,9 +28,10 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 
 ## 功能
 
-- 展示 Codex 5 小时和 7 天额度的剩余比例、已用比例和重置时间。
+- 展示 Codex 5 小时和 7 天额度的剩余比例、已用比例和重置时间；按协议返回的实际窗口时长识别额度类型，并根据可信响应自适应单环/双环、单进度条/双进度条布局。
 - 新增状态栏 Runtime 菜单：点击菜单栏图标后先展示 Codex / Claude Code 卡片、5 小时和 7 日剩余、今日 token 与总 token。
-- 状态栏支持简约、经典、丰富三档透明显示：简约只保留加粗的 5h/7d 同心双环，经典的独立进度环内只保留额度数字，丰富展示完整标签、进度条和重置时间。
+- 状态栏支持简约、经典、丰富三档透明显示：简约保留加粗额度环，经典在独立进度环内显示额度数字，丰富展示完整标签、进度条和重置时间；只有一个有效额度窗口时会自动收敛为单额度布局。
+- 环形额度保留完整粒子效果；默认只在主窗口可见、置前且聚焦时渲染，省电模式只在鼠标悬停额度环时渲染，后台、低电量、温控或“减少动态效果”状态下自动停用。
 - 状态栏额度可切换“已用量 / 剩余量”口径，并可选择显示 5 小时、7 天、今日 token 和重置倒计时；5h/7d 进度色与主界面蓝紫双环一致。
 - 状态栏用进度方向区分口径：已用为顺时针/左到右，剩余为逆时针/右到左，不额外占用文字空间。
 - 状态栏 Runtime 使用从原始 Logo 精确派生的单色模板，文字与图标按菜单栏实际深浅自动切换黑白；彩色品牌图标继续用于主窗口和浮窗。
@@ -155,10 +156,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-1.0.3-mac-arm64.dmg
-dist/codexU-1.0.3-mac-arm64.dmg.sha256
-dist/codexU-1.0.3-mac-x86_64.dmg
-dist/codexU-1.0.3-mac-x86_64.dmg.sha256
+dist/codexU-1.0.5-mac-arm64.dmg
+dist/codexU-1.0.5-mac-arm64.dmg.sha256
+dist/codexU-1.0.5-mac-x86_64.dmg
+dist/codexU-1.0.5-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。

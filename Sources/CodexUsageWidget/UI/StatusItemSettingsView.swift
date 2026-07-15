@@ -129,7 +129,10 @@ struct StatusItemSettingsView: View {
             )
         }
         return localizedPreferenceError
-            ?? language.text("固定顺序：5h、7d、今日 token", "Fixed order: 5h, 7d, today tokens")
+            ?? language.text(
+                "已确认不可用的额度会自动隐藏，恢复后重新显示",
+                "Confirmed unavailable quotas hide and return automatically"
+            )
     }
 
     private var localizedPreferenceError: String? {

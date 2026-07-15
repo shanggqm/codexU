@@ -266,8 +266,9 @@ struct UsageSnapshot: Equatable {
     let account: AccountInfo?
     let limitId: String?
     let limitName: String?
-    let primary: RateWindow?
-    let secondary: RateWindow?
+    let quotaReadSucceeded: Bool
+    let fiveHourQuota: RateWindow?
+    let sevenDayQuota: RateWindow?
     let credits: CreditsInfo?
     let cloudLifetimeTokens: Int64?
     let local: LocalUsage?
@@ -279,8 +280,9 @@ struct UsageSnapshot: Equatable {
         account: nil,
         limitId: nil,
         limitName: nil,
-        primary: nil,
-        secondary: nil,
+        quotaReadSucceeded: false,
+        fiveHourQuota: nil,
+        sevenDayQuota: nil,
         credits: nil,
         cloudLifetimeTokens: nil,
         local: nil,
@@ -294,8 +296,30 @@ struct UsageSnapshot: Equatable {
             account: account,
             limitId: limitId,
             limitName: limitName,
-            primary: primary,
-            secondary: secondary,
+            quotaReadSucceeded: quotaReadSucceeded,
+            fiveHourQuota: fiveHourQuota,
+            sevenDayQuota: sevenDayQuota,
+            credits: credits,
+            cloudLifetimeTokens: cloudLifetimeTokens,
+            local: local,
+            taskBoard: taskBoard,
+            messages: messages
+        )
+    }
+
+    func replacingQuotaWindows(
+        fiveHourQuota: RateWindow?,
+        sevenDayQuota: RateWindow?,
+        quotaReadSucceeded: Bool
+    ) -> UsageSnapshot {
+        UsageSnapshot(
+            refreshedAt: refreshedAt,
+            account: account,
+            limitId: limitId,
+            limitName: limitName,
+            quotaReadSucceeded: quotaReadSucceeded,
+            fiveHourQuota: fiveHourQuota,
+            sevenDayQuota: sevenDayQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
             local: local,
@@ -497,9 +521,16 @@ private struct LocalAnalyticsCacheEntry: Codable {
     let version: Int
     let dayKey: String
     let timeZoneIdentifier: String
-    let databaseFingerprint: String
     let sourceFingerprint: String
     let analytics: LocalAnalytics
+}
+
+enum VisualEnergyMode: Equatable {
+    // This describes visibility and system energy pressure. Components that
+    // animate must still gate on their own focus and interaction state.
+    case suspended
+    case constrained
+    case normal
 }
 
 final class UsageStore: ObservableObject {
@@ -517,19 +548,29 @@ final class UsageStore: ObservableObject {
     @Published private(set) var statisticsPreference = StatisticsTimeZonePreferenceStore.load()
     @Published private(set) var statisticsTransitionMessage: String?
     @Published private(set) var isSwitchingStatisticsTimeZone = false
+    @Published private(set) var visualEnergyMode: VisualEnergyMode = .suspended
 
     private var fullTimer: Timer?
     private var taskBoardTimer: Timer?
     private var statisticsRolloverTimer: Timer?
     private var systemTimeZoneObserver: NSObjectProtocol?
+    private var powerStateObserver: NSObjectProtocol?
+    private var thermalStateObserver: NSObjectProtocol?
     private var isRefreshingTaskBoard = false
     private var refreshGeneration: UInt64 = 0
     private var hasPendingRefresh = false
     private var statisticsSnapshotCache: [String: StatisticsSnapshotCacheEntry] = [:]
     private var statisticsSnapshotCacheOrder: [String] = []
     private var statisticsFeedbackTimer: Timer?
+    private var hasStarted = false
+    private var isMainWindowActive = false
+    private var isTaskBoardSelected = false
+    private var lastFullRefreshCompletedAt: Date?
     private let statisticsSnapshotCacheLimit = 4
     private let statisticsSnapshotCacheTTL: TimeInterval = 3 * 60
+    private let taskBoardRefreshInterval: TimeInterval = 60
+    private let foregroundFullRefreshInterval: TimeInterval = 5 * 60
+    private let backgroundFullRefreshInterval: TimeInterval = 15 * 60
 
     var runtimeSummaries: [RuntimeMenuSummary] {
         RuntimeScope.allCases.compactMap { scope in
@@ -548,6 +589,7 @@ final class UsageStore: ObservableObject {
     }
 
     func start() {
+        hasStarted = true
         refresh()
         systemTimeZoneObserver = NotificationCenter.default.addObserver(
             forName: .NSSystemTimeZoneDidChange,
@@ -558,16 +600,28 @@ final class UsageStore: ObservableObject {
             self.scheduleStatisticsRollover()
             self.refresh(queueIfBusy: true)
         }
+        powerStateObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name.NSProcessInfoPowerStateDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateVisualEnergyMode()
+        }
+        thermalStateObserver = NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateVisualEnergyMode()
+        }
+        updateVisualEnergyMode()
         scheduleStatisticsRollover()
-        fullTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
-            self?.refresh()
-        }
-        taskBoardTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            self?.refreshTaskBoard()
-        }
+        scheduleFullRefreshTimer()
+        updateTaskBoardPollingState(refreshImmediately: false)
     }
 
     func stop() {
+        hasStarted = false
         fullTimer?.invalidate()
         taskBoardTimer?.invalidate()
         statisticsRolloverTimer?.invalidate()
@@ -576,11 +630,20 @@ final class UsageStore: ObservableObject {
             NotificationCenter.default.removeObserver(systemTimeZoneObserver)
             self.systemTimeZoneObserver = nil
         }
+        if let powerStateObserver {
+            NotificationCenter.default.removeObserver(powerStateObserver)
+            self.powerStateObserver = nil
+        }
+        if let thermalStateObserver {
+            NotificationCenter.default.removeObserver(thermalStateObserver)
+            self.thermalStateObserver = nil
+        }
+        visualEnergyMode = .suspended
     }
 
     func refresh(queueIfBusy: Bool = false) {
-        guard !isRefreshing else {
-            if queueIfBusy {
+        guard !isRefreshing, !isRefreshingTaskBoard else {
+            if queueIfBusy || isRefreshingTaskBoard {
                 hasPendingRefresh = true
             }
             return
@@ -605,6 +668,8 @@ final class UsageStore: ObservableObject {
                     }
                 }
                 self.isRefreshing = false
+                self.lastFullRefreshCompletedAt = Date()
+                self.scheduleFullRefreshTimer()
                 if self.hasPendingRefresh {
                     self.hasPendingRefresh = false
                     self.refresh()
@@ -718,40 +783,144 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    func setMainWindowActive(_ isActive: Bool) {
+        guard isMainWindowActive != isActive else { return }
+        isMainWindowActive = isActive
+        updateVisualEnergyMode()
+        guard hasStarted else { return }
+        scheduleFullRefreshTimer()
+        if isActive {
+            refreshIfStale(maximumAge: foregroundFullRefreshInterval)
+        }
+        updateTaskBoardPollingState(refreshImmediately: isTaskBoardPollingEnabled)
+    }
+
+    private func updateVisualEnergyMode() {
+        guard isMainWindowActive else {
+            visualEnergyMode = .suspended
+            return
+        }
+
+        let processInfo = ProcessInfo.processInfo
+        if processInfo.isLowPowerModeEnabled || processInfo.thermalState != .nominal {
+            visualEnergyMode = .constrained
+        } else {
+            visualEnergyMode = .normal
+        }
+    }
+
+    func refreshIfStale(maximumAge: TimeInterval) {
+        // An in-flight full refresh will make the snapshot fresh; queueing a
+        // second one here commonly doubles startup work when occlusion state
+        // arrives just after the initial load begins.
+        guard !isRefreshing else { return }
+        guard let lastFullRefreshCompletedAt else {
+            refresh(queueIfBusy: true)
+            return
+        }
+        guard Date().timeIntervalSince(lastFullRefreshCompletedAt) >= maximumAge else { return }
+        refresh(queueIfBusy: true)
+    }
+
+    func setTaskBoardSelected(_ isSelected: Bool) {
+        guard isTaskBoardSelected != isSelected else { return }
+        isTaskBoardSelected = isSelected
+        guard hasStarted else { return }
+        updateTaskBoardPollingState(refreshImmediately: isTaskBoardPollingEnabled)
+    }
+
+    private var isTaskBoardPollingEnabled: Bool {
+        isMainWindowActive && isTaskBoardSelected
+    }
+
+    private func scheduleFullRefreshTimer() {
+        fullTimer?.invalidate()
+        fullTimer = nil
+        guard hasStarted else { return }
+
+        let interval = isMainWindowActive
+            ? foregroundFullRefreshInterval
+            : backgroundFullRefreshInterval
+        let elapsed = lastFullRefreshCompletedAt.map { max(0, Date().timeIntervalSince($0)) } ?? 0
+        let nextDelay = max(1, interval - elapsed)
+        let timer = Timer(
+            fire: Date().addingTimeInterval(nextDelay),
+            interval: interval,
+            repeats: true
+        ) { [weak self] _ in
+            self?.refresh()
+        }
+        timer.tolerance = interval * 0.1
+        RunLoop.main.add(timer, forMode: .common)
+        fullTimer = timer
+    }
+
+    private func updateTaskBoardPollingState(refreshImmediately: Bool) {
+        taskBoardTimer?.invalidate()
+        taskBoardTimer = nil
+        guard hasStarted, isTaskBoardPollingEnabled else { return }
+
+        let timer = Timer.scheduledTimer(withTimeInterval: taskBoardRefreshInterval, repeats: true) { [weak self] _ in
+            self?.refreshTaskBoard()
+        }
+        timer.tolerance = 12
+        taskBoardTimer = timer
+        if refreshImmediately {
+            refreshTaskBoard()
+        }
+    }
+
     private func refreshTaskBoard() {
         guard !isRefreshing, !isRefreshingTaskBoard else { return }
         isRefreshingTaskBoard = true
         let scope = selectedRuntimeScope
+        let preference = statisticsPreference
 
         DispatchQueue.global(qos: .utility).async {
             let taskBoard = MultiRuntimeUsageReader().loadTaskBoard(
                 scope: scope,
-                statisticsPreference: self.statisticsPreference
+                statisticsPreference: preference
             )
             DispatchQueue.main.async {
                 self.applyTaskBoard(taskBoard, for: scope)
                 self.isRefreshingTaskBoard = false
+                if self.hasPendingRefresh {
+                    self.hasPendingRefresh = false
+                    self.refresh()
+                }
             }
         }
     }
 
     private func apply(_ multiSnapshot: MultiRuntimeUsageSnapshot) {
-        let nextScope = multiSnapshot.defaultScope(
+        let reconciledRuntimes = RuntimeQuotaContinuity.reconcile(
+            previous: runtimeSnapshots,
+            incoming: multiSnapshot.runtimes
+        )
+        let reconciledSnapshot = MultiRuntimeUsageSnapshot(
+            refreshedAt: multiSnapshot.refreshedAt,
+            runtimes: reconciledRuntimes,
+            aggregate: multiSnapshot.aggregate,
+            statisticsIdentity: multiSnapshot.statisticsIdentity
+        )
+        let nextScope = reconciledSnapshot.defaultScope(
             preferred: selectedRuntimeScope,
             allowedScopes: visibleRuntimeScopes
         )
-        multiRuntimeSnapshot = multiSnapshot
-        runtimeSnapshots = multiSnapshot.runtimes
+        multiRuntimeSnapshot = reconciledSnapshot
+        runtimeSnapshots = reconciledRuntimes
         selectedRuntimeScope = nextScope
-        snapshot = multiSnapshot.displaySnapshot(for: nextScope)
+        snapshot = reconciledSnapshot.displaySnapshot(for: nextScope)
     }
 
     private func applyTaskBoard(_ taskBoard: TaskBoard?, for scope: RuntimeScope) {
         guard let index = runtimeSnapshots.firstIndex(where: { $0.scope == scope }) else {
+            guard snapshot.taskBoard?.columns != taskBoard?.columns else { return }
             snapshot = snapshot.replacingTaskBoard(taskBoard)
             return
         }
 
+        guard runtimeSnapshots[index].snapshot.taskBoard?.columns != taskBoard?.columns else { return }
         runtimeSnapshots[index] = runtimeSnapshots[index].replacingTaskBoard(taskBoard)
         let aggregate = AgentUsageAggregator().aggregate(runtimeSnapshots, at: multiRuntimeSnapshot.refreshedAt)
         multiRuntimeSnapshot = MultiRuntimeUsageSnapshot(
@@ -768,10 +937,15 @@ final class UsageStore: ObservableObject {
 
 final class CodexUsageReader {
     private let fileManager = FileManager.default
-    private let localAnalyticsCacheVersion = 6
+    private let localAnalyticsCacheVersion = 7
     private let sessionUsageCacheVersion = 4
+    private static let sessionUsageCacheLimit = 1_024
+    private static let persistentSessionUsageCacheWriteInterval: TimeInterval = 15 * 60
     private static var sessionUsageCache: [String: SessionUsageCacheEntry] = [:]
+    private static var sessionUsageCacheOrder: [String] = []
     private static var persistentSessionUsageCache: [String: SessionUsageCacheEntry]?
+    private static var persistentSessionUsageCacheIsDirty = false
+    private static var lastPersistentSessionUsageCacheWriteAt: Date?
     private static var localAnalyticsCache: LocalAnalyticsCacheEntry?
 
     func load(context: RuntimeLoadContext) -> UsageSnapshot {
@@ -785,8 +959,9 @@ final class CodexUsageReader {
             account: appServer.account,
             limitId: appServer.limitId,
             limitName: appServer.limitName,
-            primary: appServer.primary,
-            secondary: appServer.secondary,
+            quotaReadSucceeded: appServer.quotaReadSucceeded,
+            fiveHourQuota: appServer.fiveHourQuota,
+            sevenDayQuota: appServer.sevenDayQuota,
             credits: appServer.credits,
             cloudLifetimeTokens: appServer.cloudLifetimeTokens,
             local: local,
@@ -804,8 +979,10 @@ final class CodexUsageReader {
         var account: AccountInfo?
         var limitId: String?
         var limitName: String?
-        var primary: RateWindow?
-        var secondary: RateWindow?
+        var quotaReadSucceeded = false
+        var fiveHourQuota: RateWindow?
+        var sevenDayQuota: RateWindow?
+        var rateLimitDiagnostics: [String] = []
         var credits: CreditsInfo?
         var cloudLifetimeTokens: Int64?
     }
@@ -963,9 +1140,12 @@ final class CodexUsageReader {
         }
 
         lock.lock()
-        messages.append(contentsOf: appServerMessages)
         let finalSnapshot = snapshot
+        let finalAppServerMessages = appServerMessages
         lock.unlock()
+
+        messages.append(contentsOf: finalAppServerMessages)
+        messages.append(contentsOf: finalSnapshot.rateLimitDiagnostics)
 
         return finalSnapshot
     }
@@ -993,8 +1173,33 @@ final class CodexUsageReader {
         guard let limits = selected else { return }
         snapshot.limitId = limits["limitId"] as? String
         snapshot.limitName = limits["limitName"] as? String
-        snapshot.primary = parseRateWindow(limits["primary"])
-        snapshot.secondary = parseRateWindow(limits["secondary"])
+        let rawWindows = [limits["primary"], limits["secondary"]]
+        let parsedWindows = rawWindows.map(parseRateWindow)
+        let normalized = CodexRateLimitNormalizer.normalize(parsedWindows)
+        let hasWindowFields = limits.keys.contains("primary") || limits.keys.contains("secondary")
+        let hasMalformedWindow = zip(rawWindows, parsedWindows).contains { raw, parsed in
+            guard let raw, !(raw is NSNull) else { return false }
+            return parsed == nil
+        }
+        let quotaReadSucceeded = CodexRateLimitNormalizer.isAuthoritative(
+            hasWindowFields: hasWindowFields,
+            hasMalformedWindow: hasMalformedWindow,
+            normalized: normalized
+        )
+        snapshot.quotaReadSucceeded = quotaReadSucceeded
+        // Quota topology is committed atomically. A partly understood payload must
+        // never make a confirmed dual-window layout collapse into a misleading
+        // single-window layout; continuity will keep the last confirmed topology.
+        snapshot.fiveHourQuota = quotaReadSucceeded ? normalized.fiveHour : nil
+        snapshot.sevenDayQuota = quotaReadSucceeded ? normalized.sevenDay : nil
+        var diagnostics = rateLimitDiagnostics(for: normalized)
+        if !hasWindowFields {
+            diagnostics.append("Codex 额度响应缺少窗口字段，未将其视为当前无限制")
+        }
+        if hasMalformedWindow {
+            diagnostics.append("Codex 额度窗口格式无法解析，未将其视为当前无限制")
+        }
+        snapshot.rateLimitDiagnostics = diagnostics
 
         var resetCredits: Int?
         if let reset = result["rateLimitResetCredits"] as? [String: Any] {
@@ -1030,6 +1235,32 @@ final class CodexUsageReader {
             windowDurationMins: intValue(object["windowDurationMins"]),
             resetsAt: resetDate
         )
+    }
+
+    private func rateLimitDiagnostics(for windows: CodexNormalizedRateWindows) -> [String] {
+        var messages: [String] = []
+
+        if windows.fiveHourMatchCount > 1 {
+            messages.append("Codex 返回了重复的 5 小时额度窗口，已停止显示该窗口")
+        }
+        if windows.sevenDayMatchCount > 1 {
+            messages.append("Codex 返回了重复的 7 天额度窗口，已停止显示该窗口")
+        }
+
+        let missingDurationCount = windows.unclassified.filter {
+            $0.windowDurationMins == nil
+        }.count
+        if missingDurationCount > 0 {
+            messages.append("Codex 返回了缺少时长的额度窗口，未将其标注为 5 小时或 7 天")
+        }
+
+        let unknownDurations = Set(windows.unclassified.compactMap(\.windowDurationMins)).sorted()
+        if !unknownDurations.isEmpty {
+            let values = unknownDurations.map(String.init).joined(separator: "、")
+            messages.append("Codex 返回了未识别的额度窗口（\(values) 分钟），未将其标注为 5 小时或 7 天")
+        }
+
+        return messages
     }
 
     private func parseCloudLifetimeTokens(_ result: [String: Any]) -> Int64? {
@@ -1207,19 +1438,14 @@ final class CodexUsageReader {
         }
 
         let dayKey = statistics.dayKey(for: dayStart)
-        let databaseFingerprint = fileFingerprint(paths: [
-            dbPath,
-            dbPath + "-wal",
-            dbPath + "-shm"
-        ])
         let sourceFingerprint = sessionSourcesFingerprint(sources)
 
         if let cached = Self.localAnalyticsCache,
            cached.version == localAnalyticsCacheVersion,
            cached.dayKey == dayKey,
            cached.timeZoneIdentifier == statistics.resolvedIdentifier,
-           cached.databaseFingerprint == databaseFingerprint,
            cached.sourceFingerprint == sourceFingerprint {
+            writePersistentSessionUsageCache()
             return cached.analytics
         }
 
@@ -1227,9 +1453,9 @@ final class CodexUsageReader {
            cached.version == localAnalyticsCacheVersion,
            cached.dayKey == dayKey,
            cached.timeZoneIdentifier == statistics.resolvedIdentifier,
-           cached.databaseFingerprint == databaseFingerprint,
            cached.sourceFingerprint == sourceFingerprint {
             Self.localAnalyticsCache = cached
+            writePersistentSessionUsageCache()
             return cached.analytics
         }
 
@@ -1338,7 +1564,6 @@ final class CodexUsageReader {
                 version: localAnalyticsCacheVersion,
                 dayKey: dayKey,
                 timeZoneIdentifier: statistics.resolvedIdentifier,
-                databaseFingerprint: databaseFingerprint,
                 sourceFingerprint: sourceFingerprint,
                 analytics: analytics
             )
@@ -1369,7 +1594,6 @@ final class CodexUsageReader {
             version: localAnalyticsCacheVersion,
             dayKey: dayKey,
             timeZoneIdentifier: statistics.resolvedIdentifier,
-            databaseFingerprint: databaseFingerprint,
             sourceFingerprint: sourceFingerprint,
             analytics: analytics
         )
@@ -1675,14 +1899,14 @@ final class CodexUsageReader {
         else { return nil }
 
         let modificationDate = attributes[.modificationDate] as? Date
-        if let cached = Self.sessionUsageCache[source.rolloutPath],
+        if let cached = memorySessionUsageCacheEntry(for: source.rolloutPath),
            sameSessionFileIdentity(cached, fileSize: fileSize, modificationDate: modificationDate) {
             return cached
         }
 
         if let cached = persistentSessionUsageCache()[source.rolloutPath],
            sameSessionFileIdentity(cached, fileSize: fileSize, modificationDate: modificationDate) {
-            Self.sessionUsageCache[source.rolloutPath] = cached
+            storeSessionUsageCacheEntry(cached, for: source.rolloutPath, markDirty: false)
             return cached
         }
 
@@ -1708,7 +1932,7 @@ final class CodexUsageReader {
                 toolCalls: parsed.toolCalls,
                 skillLoads: parsed.skillLoads
             )
-            Self.sessionUsageCache[source.rolloutPath] = entry
+            storeSessionUsageCacheEntry(entry, for: source.rolloutPath)
             return entry
         }
 
@@ -1776,8 +2000,32 @@ final class CodexUsageReader {
             toolCalls: toolCalls,
             skillLoads: skillLoads
         )
-        Self.sessionUsageCache[source.rolloutPath] = entry
+        storeSessionUsageCacheEntry(entry, for: source.rolloutPath)
         return entry
+    }
+
+    private func memorySessionUsageCacheEntry(for key: String) -> SessionUsageCacheEntry? {
+        guard let entry = Self.sessionUsageCache[key] else { return nil }
+        Self.sessionUsageCacheOrder.removeAll { $0 == key }
+        Self.sessionUsageCacheOrder.append(key)
+        return entry
+    }
+
+    private func storeSessionUsageCacheEntry(
+        _ entry: SessionUsageCacheEntry,
+        for key: String,
+        markDirty: Bool = true
+    ) {
+        Self.sessionUsageCache[key] = entry
+        if markDirty {
+            Self.persistentSessionUsageCacheIsDirty = true
+        }
+        Self.sessionUsageCacheOrder.removeAll { $0 == key }
+        Self.sessionUsageCacheOrder.append(key)
+        while Self.sessionUsageCacheOrder.count > Self.sessionUsageCacheLimit {
+            let evicted = Self.sessionUsageCacheOrder.removeFirst()
+            Self.sessionUsageCache.removeValue(forKey: evicted)
+        }
     }
 
     private func parseSessionUsageWithGrep(
@@ -2154,8 +2402,9 @@ final class CodexUsageReader {
             return [:]
         }
 
-        Self.persistentSessionUsageCache = diskCache.entries
-        return diskCache.entries
+        let entries = limitedSessionUsageCache(diskCache.entries)
+        Self.persistentSessionUsageCache = entries
+        return entries
     }
 
     private func writePersistentLocalAnalyticsCache(_ entry: LocalAnalyticsCacheEntry?) {
@@ -2171,8 +2420,16 @@ final class CodexUsageReader {
     }
 
     private func writePersistentSessionUsageCache() {
+        guard Self.persistentSessionUsageCacheIsDirty else { return }
+        let now = Date()
+        if let lastWrite = Self.lastPersistentSessionUsageCacheWriteAt,
+           now.timeIntervalSince(lastWrite) < Self.persistentSessionUsageCacheWriteInterval {
+            return
+        }
         guard let url = sessionUsageCacheURL() else { return }
-        let mergedEntries = persistentSessionUsageCache().merging(Self.sessionUsageCache) { _, new in new }
+        let mergedEntries = limitedSessionUsageCache(
+            persistentSessionUsageCache().merging(Self.sessionUsageCache) { _, new in new }
+        )
         Self.persistentSessionUsageCache = mergedEntries
 
         do {
@@ -2180,9 +2437,23 @@ final class CodexUsageReader {
             let encoder = JSONEncoder()
             let data = try encoder.encode(SessionUsageDiskCache(version: sessionUsageCacheVersion, entries: mergedEntries))
             try data.write(to: url, options: .atomic)
+            Self.persistentSessionUsageCacheIsDirty = false
+            Self.lastPersistentSessionUsageCacheWriteAt = now
         } catch {
             debugLog("failed to write session usage cache: \(error.localizedDescription)")
         }
+    }
+
+    private func limitedSessionUsageCache(
+        _ entries: [String: SessionUsageCacheEntry]
+    ) -> [String: SessionUsageCacheEntry] {
+        guard entries.count > Self.sessionUsageCacheLimit else { return entries }
+        let retained = entries.sorted { lhs, rhs in
+            let lhsDate = lhs.value.modificationDate ?? .distantPast
+            let rhsDate = rhs.value.modificationDate ?? .distantPast
+            return lhsDate == rhsDate ? lhs.key < rhs.key : lhsDate > rhsDate
+        }.prefix(Self.sessionUsageCacheLimit)
+        return Dictionary(uniqueKeysWithValues: retained.map { ($0.key, $0.value) })
     }
 
     private func sameSessionFileIdentity(
@@ -2196,21 +2467,6 @@ final class CodexUsageReader {
         return cachedMs == currentMs
     }
 
-    private func fileFingerprint(paths: [String]) -> String {
-        var components: [String] = []
-        for path in paths {
-            components.append(path)
-            guard let attributes = try? fileManager.attributesOfItem(atPath: path) else {
-                components.append("missing")
-                continue
-            }
-            components.append(String((attributes[.size] as? NSNumber)?.int64Value ?? -1))
-            let modifiedMs = Int64(((attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1) * 1000)
-            components.append(String(modifiedMs))
-        }
-        return components.joined(separator: "|")
-    }
-
     private func sessionSourcesFingerprint(_ sources: [SessionUsageSource]) -> String {
         var components: [String] = [String(sources.count)]
         for source in sources {
@@ -2218,6 +2474,8 @@ final class CodexUsageReader {
             components.append(source.rolloutPath)
             components.append(source.model ?? "")
             components.append(source.cwd)
+            let updatedMs = Int64((source.updatedAt?.timeIntervalSince1970 ?? -1) * 1_000)
+            components.append(String(updatedMs))
             guard let attributes = try? fileManager.attributesOfItem(atPath: source.rolloutPath) else {
                 components.append("missing")
                 continue
@@ -2645,6 +2903,24 @@ enum WidgetThemeMode: String, CaseIterable, Equatable {
     }
 }
 
+enum ParticleAnimationMode: String, CaseIterable, Equatable {
+    case standard = "default"
+    case powerSaving = "powerSaving"
+
+    static let storageKey = "codexU.particleAnimationMode"
+
+    static func storedOrDefault(defaults: UserDefaults = .standard) -> ParticleAnimationMode {
+        guard let rawValue = defaults.string(forKey: storageKey),
+              let mode = ParticleAnimationMode(rawValue: rawValue)
+        else { return .standard }
+        return mode
+    }
+
+    func persist(defaults: UserDefaults = .standard) {
+        defaults.set(rawValue, forKey: Self.storageKey)
+    }
+}
+
 final class AppSettings: ObservableObject {
     private static let keepMainWindowOnTopKey = "codexU.keepMainWindowOnTop"
     private static let keepRunningWhenMainWindowClosedKey = "codexU.keepRunningWhenMainWindowClosed"
@@ -2664,6 +2940,12 @@ final class AppSettings: ObservableObject {
         didSet {
             themeMode.persist(defaults: defaults)
             themeMode.applyAppearance()
+        }
+    }
+
+    @Published var particleAnimationMode: ParticleAnimationMode {
+        didSet {
+            particleAnimationMode.persist(defaults: defaults)
         }
     }
 
@@ -2711,6 +2993,7 @@ final class AppSettings: ObservableObject {
         self.defaults = defaults
         language = WidgetLanguage.storedOrAutomatic(defaults: defaults)
         themeMode = WidgetThemeMode.storedOrAutomatic(defaults: defaults)
+        particleAnimationMode = ParticleAnimationMode.storedOrDefault(defaults: defaults)
         keepMainWindowOnTop = defaults.bool(forKey: Self.keepMainWindowOnTopKey)
         if defaults.object(forKey: Self.keepRunningWhenMainWindowClosedKey) == nil {
             keepRunningWhenMainWindowClosed = true
@@ -2875,6 +3158,8 @@ struct UsageWidgetView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var updateStore: AppUpdateStore
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var selectedDashboardTab: DashboardTab = .tasks
 
     static let widgetWidth: CGFloat = 820
@@ -2884,9 +3169,11 @@ struct UsageWidgetView: View {
     static let windowCornerRadius: CGFloat = 18
 
     private var snapshot: UsageSnapshot { store.snapshot }
-    private var primary: RateWindow? { snapshot.primary }
     private var language: WidgetLanguage { settings.language }
     private var themeMode: WidgetThemeMode { settings.themeMode }
+    private var selectedQuotaIsStale: Bool {
+        store.runtimeSnapshot(for: store.selectedRuntimeScope)?.status == .stale
+    }
     private var effectiveColorScheme: ColorScheme {
         themeMode.preferredColorScheme ?? colorScheme
     }
@@ -2902,37 +3189,42 @@ struct UsageWidgetView: View {
         .frame(minHeight: Self.widgetMinHeight, maxHeight: .infinity, alignment: .topLeading)
         .environment(\.colorScheme, effectiveColorScheme)
         .preferredColorScheme(themeMode.preferredColorScheme)
+        .readableForegroundHierarchy(effectiveColorScheme)
         .onAppear {
             themeMode.applyAppearance()
+            store.setTaskBoardSelected(selectedDashboardTab == .tasks)
+        }
+        .onDisappear {
+            store.setTaskBoardSelected(false)
+        }
+        .onChange(of: selectedDashboardTab) { tab in
+            store.setTaskBoardSelected(tab == .tasks)
         }
     }
 
     @ViewBuilder
     private var windowSurface: some View {
-#if compiler(>=6.2)
-        if #available(macOS 26.0, *) {
-            RoundedRectangle(cornerRadius: Self.windowCornerRadius, style: .continuous)
-                .fill(Color.clear)
-                .glassEffect(
-                    .regular.tint(WidgetPalette.sectionTint(effectiveColorScheme)),
-                    in: .rect(cornerRadius: Self.windowCornerRadius, style: .continuous)
-                )
-        } else {
-            RoundedRectangle(cornerRadius: Self.windowCornerRadius, style: .continuous)
-                .fill(WidgetPalette.sectionFill(effectiveColorScheme))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Self.windowCornerRadius, style: .continuous)
-                        .strokeBorder(WidgetPalette.sectionStroke(effectiveColorScheme), lineWidth: 0.8)
-                )
-        }
-#else
+        staticWindowSurface(
+            fill: WidgetPalette.windowScrim(
+                effectiveColorScheme,
+                reduceTransparency: reduceTransparency
+            )
+        )
+    }
+
+    private func staticWindowSurface(fill: Color) -> some View {
         RoundedRectangle(cornerRadius: Self.windowCornerRadius, style: .continuous)
-            .fill(WidgetPalette.sectionFill(effectiveColorScheme))
+            .fill(fill)
             .overlay(
                 RoundedRectangle(cornerRadius: Self.windowCornerRadius, style: .continuous)
-                    .strokeBorder(WidgetPalette.sectionStroke(effectiveColorScheme), lineWidth: 0.8)
+                    .strokeBorder(
+                        WidgetPalette.sectionStroke(
+                            effectiveColorScheme,
+                            increasedContrast: colorSchemeContrast == .increased
+                        ),
+                        lineWidth: colorSchemeContrast == .increased ? 1.0 : 0.8
+                    )
             )
-#endif
     }
 
     private var widgetContent: some View {
@@ -3002,18 +3294,22 @@ struct UsageWidgetView: View {
         HStack(alignment: .center, spacing: 26) {
             VStack(spacing: 8) {
                 DualQuotaRing(
-                    primary: snapshot.primary,
-                    secondary: snapshot.secondary,
-                    language: language
+                    fiveHourQuota: snapshot.fiveHourQuota,
+                    sevenDayQuota: snapshot.sevenDayQuota,
+                    quotaReadSucceeded: snapshot.quotaReadSucceeded,
+                    quotaIsStale: selectedQuotaIsStale,
+                    language: language,
+                    visualEnergyMode: store.visualEnergyMode,
+                    animationMode: settings.particleAnimationMode
                 )
                 .frame(width: 145, height: 145)
 
                 QuotaResetSummary(
-                    primary: snapshot.primary,
-                    secondary: snapshot.secondary,
+                    fiveHourQuota: snapshot.fiveHourQuota,
+                    sevenDayQuota: snapshot.sevenDayQuota,
                     language: language
                 )
-                .frame(width: 154)
+                .frame(width: 154, height: 26)
             }
 
             VStack(alignment: .leading, spacing: 13) {
@@ -3157,7 +3453,9 @@ struct UsageWidgetView: View {
 
     private var shouldShowEnvironmentChecklist: Bool {
         if snapshot.messages.contains("正在读取 codexU 数据") { return false }
-        return (!snapshot.messages.isEmpty && (snapshot.primary == nil || snapshot.local == nil))
+        let quotaUnavailable = snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil
+        let hasQuotaProtocolWarning = snapshot.messages.contains { $0.contains("额度窗口") }
+        return (!snapshot.messages.isEmpty && (quotaUnavailable || hasQuotaProtocolWarning || snapshot.local == nil))
             || snapshot.account == nil
             || snapshot.local == nil
     }
@@ -3167,7 +3465,7 @@ struct UsageWidgetView: View {
         let messages = snapshot.messages.joined(separator: "\n")
 
         if store.selectedRuntimeScope == .claudeCode {
-            if snapshot.primary == nil || snapshot.secondary == nil {
+            if snapshot.fiveHourQuota == nil || snapshot.sevenDayQuota == nil {
                 let isStale = messages.contains("快照已过期")
                 items.append(DiagnosticItem(
                     id: isStale ? "claude-statusline-stale" : "claude-statusline-missing",
@@ -3207,7 +3505,7 @@ struct UsageWidgetView: View {
             return items
         }
 
-        if snapshot.primary == nil || snapshot.account == nil {
+        if (snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil) || snapshot.account == nil {
             if messages.contains("未找到 codex") {
                 items.append(DiagnosticItem(
                     id: "codex-missing",
@@ -3458,6 +3756,7 @@ struct TitlebarToolbarView: View {
         .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44, alignment: .topTrailing)
         .environment(\.colorScheme, effectiveColorScheme)
         .preferredColorScheme(themeMode.preferredColorScheme)
+        .readableForegroundHierarchy(effectiveColorScheme)
     }
 }
 
@@ -3501,6 +3800,23 @@ struct SettingsPanelView: View {
                                 SettingsSegmentOption(value: .system, title: language.text("自动", "System")),
                                 SettingsSegmentOption(value: .light, title: language.text("浅色", "Light")),
                                 SettingsSegmentOption(value: .dark, title: language.text("深色", "Dark"))
+                            ],
+                            width: 190
+                        )
+                    }
+
+                    SettingsPickerRow(
+                        title: language.text("额度环动效", "Quota ring motion"),
+                        detail: language.text(
+                            "默认仅窗口置前且聚焦；省电仅悬停环带",
+                            "Default: frontmost and focused; Power Saving: ring hover only"
+                        )
+                    ) {
+                        SettingsSegmentedControl(
+                            selection: $settings.particleAnimationMode,
+                            options: [
+                                SettingsSegmentOption(value: .standard, title: language.text("默认", "Default")),
+                                SettingsSegmentOption(value: .powerSaving, title: language.text("省电", "Power Saving"))
                             ],
                             width: 190
                         )
@@ -3657,6 +3973,7 @@ struct SettingsPanelView: View {
         .padding(20)
         .frame(width: 480, alignment: .topLeading)
         .background(WidgetPalette.sectionFill(colorScheme).opacity(0.35))
+        .readableForegroundHierarchy(colorScheme)
     }
 
     private var statisticsTimeZoneSelectionBinding: Binding<StatisticsTimeZoneSelection> {
@@ -3795,6 +4112,7 @@ struct SettingsSegmentedControl<Value: Hashable>: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(option.title)
+                .accessibilityAddTraits(selection == option.value ? .isSelected : [])
 
                 if index < options.count - 1 {
                     Rectangle()
@@ -4072,43 +4390,37 @@ struct DashboardTabSwitch: View {
 
 struct SectionBackgroundModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
-    @ViewBuilder
     func body(content: Content) -> some View {
-#if compiler(>=6.2)
-        if #available(macOS 26.0, *) {
-            content
-                .glassEffect(
-                    .regular.tint(WidgetPalette.sectionTint(colorScheme)),
-                    in: .rect(cornerRadius: 18, style: .continuous)
-                )
-        } else {
-            content
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(WidgetPalette.sectionFill(colorScheme))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .strokeBorder(WidgetPalette.sectionStroke(colorScheme), lineWidth: 0.8)
-                        )
-                )
-        }
-#else
         content
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(WidgetPalette.sectionFill(colorScheme))
+                    .fill(
+                        WidgetPalette.sectionFill(
+                            colorScheme,
+                            reduceTransparency: reduceTransparency
+                        )
+                    )
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(WidgetPalette.sectionStroke(colorScheme), lineWidth: 0.8)
+                            .strokeBorder(
+                                WidgetPalette.sectionStroke(
+                                    colorScheme,
+                                    increasedContrast: colorSchemeContrast == .increased
+                                ),
+                                lineWidth: colorSchemeContrast == .increased ? 1.0 : 0.8
+                            )
                     )
             )
-#endif
     }
 }
 
 struct CardBackgroundModifier: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let cornerRadius: CGFloat
     let elevated: Bool
 
@@ -4116,16 +4428,37 @@ struct CardBackgroundModifier: ViewModifier {
         content
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(WidgetPalette.cardFill(colorScheme, elevated: elevated))
+                    .fill(
+                        WidgetPalette.cardFill(
+                            colorScheme,
+                            elevated: elevated,
+                            reduceTransparency: reduceTransparency
+                        )
+                    )
                     .overlay(
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .strokeBorder(WidgetPalette.cardStroke(colorScheme, elevated: elevated), lineWidth: 0.8)
+                            .strokeBorder(
+                                WidgetPalette.cardStroke(
+                                    colorScheme,
+                                    elevated: elevated,
+                                    increasedContrast: colorSchemeContrast == .increased
+                                ),
+                                lineWidth: colorSchemeContrast == .increased ? 1.0 : 0.8
+                            )
                     )
             )
     }
 }
 
 extension View {
+    func readableForegroundHierarchy(_ colorScheme: ColorScheme) -> some View {
+        foregroundStyle(
+            Color.primary,
+            WidgetPalette.secondaryText(colorScheme),
+            WidgetPalette.tertiaryText(colorScheme)
+        )
+    }
+
     func sectionBackground() -> some View {
         modifier(SectionBackgroundModifier())
     }
@@ -4163,165 +4496,358 @@ struct GaugeRing: View {
     }
 }
 
-struct DualQuotaRing: View {
-    let primary: RateWindow?
-    let secondary: RateWindow?
-    let language: WidgetLanguage
+private enum QuotaRingGeometry {
+    static let outerDiameter: CGFloat = 145
+    static let innerDiameter: CGFloat = 107
+    static let lineWidth: CGFloat = 16
+    static let dualCenterDiameter: CGFloat = 72
+    static let singleCenterDiameter: CGFloat = 110
+    static let outerRadius = (outerDiameter - lineWidth) / 2
+    static let innerRadius = (innerDiameter - lineWidth) / 2
+    static let center = CGPoint(x: outerDiameter / 2, y: outerDiameter / 2)
+}
 
-    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+private enum QuotaWindowKind: String, Hashable {
+    case fiveHour
+    case sevenDay
+
+    var compactTitle: String {
+        switch self {
+        case .fiveHour: return "5h"
+        case .sevenDay: return "7d"
+        }
+    }
+
+    var startColor: RingRGBColor {
+        switch self {
+        case .fiveHour: return quotaPrimaryStartColor
+        case .sevenDay: return quotaSecondaryStartColor
+        }
+    }
+
+    var endColor: RingRGBColor {
+        switch self {
+        case .fiveHour: return quotaPrimaryEndColor
+        case .sevenDay: return quotaSecondaryEndColor
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .fiveHour: return quotaPrimaryColor
+        case .sevenDay: return quotaSecondaryColor
+        }
+    }
+}
+
+private struct QuotaRingItem: Identifiable, Equatable {
+    let kind: QuotaWindowKind
+    let window: RateWindow
+
+    var id: QuotaWindowKind { kind }
+
+    var remainingText: String {
+        "\(Int(window.remainingPercent.rounded()))%"
+    }
+
+    var particleProgress: CGFloat? {
+        let progress = CGFloat(max(0, min(1, window.remainingPercent / 100)))
+        return progress > 0.02 ? progress : nil
+    }
+}
+
+private struct QuotaParticleLane: Equatable {
+    let radius: CGFloat
+    let progress: CGFloat?
+    let maximumCount: Int
+    let phaseOffset: Double
+}
+
+private struct QuotaRingPresentation: Equatable {
+    enum Topology: Equatable {
+        case none
+        case single
+        case dual
+    }
+
+    let items: [QuotaRingItem]
+
+    init(fiveHourQuota: RateWindow?, sevenDayQuota: RateWindow?) {
+        var items: [QuotaRingItem] = []
+        if let fiveHourQuota {
+            items.append(QuotaRingItem(kind: .fiveHour, window: fiveHourQuota))
+        }
+        if let sevenDayQuota {
+            items.append(QuotaRingItem(kind: .sevenDay, window: sevenDayQuota))
+        }
+        self.items = items
+    }
+
+    var topology: Topology {
+        switch items.count {
+        case 0: return .none
+        case 1: return .single
+        default: return .dual
+        }
+    }
+
+    var particleLanes: [QuotaParticleLane] {
+        switch topology {
+        case .none:
+            return []
+        case .single:
+            return items.prefix(1).map {
+                QuotaParticleLane(
+                    radius: QuotaRingGeometry.outerRadius,
+                    progress: $0.particleProgress,
+                    maximumCount: 17,
+                    phaseOffset: 0
+                )
+            }
+        case .dual:
+            return [
+                QuotaParticleLane(
+                    radius: QuotaRingGeometry.outerRadius,
+                    progress: items[0].particleProgress,
+                    maximumCount: 17,
+                    phaseOffset: 0
+                ),
+                QuotaParticleLane(
+                    radius: QuotaRingGeometry.innerRadius,
+                    progress: items[1].particleProgress,
+                    maximumCount: 12,
+                    phaseOffset: 0.31
+                )
+            ]
+        }
+    }
+
+    var activeRadii: [CGFloat] {
+        particleLanes.map(\.radius)
+    }
+
+    func diameter(for item: QuotaRingItem) -> CGFloat {
+        guard topology == .dual, item.kind == .sevenDay else {
+            return QuotaRingGeometry.outerDiameter
+        }
+        return QuotaRingGeometry.innerDiameter
+    }
+}
+
+private enum QuotaRingHoverTarget {
+    private static let bounds = CGRect(
+        x: 0,
+        y: 0,
+        width: QuotaRingGeometry.outerDiameter,
+        height: QuotaRingGeometry.outerDiameter
+    )
+    private static let hitSlop: CGFloat = 10
+
+    static func contains(_ location: CGPoint, activeRadii: [CGFloat]) -> Bool {
+        guard bounds.contains(location), !activeRadii.isEmpty else { return false }
+        let distance = hypot(
+            location.x - QuotaRingGeometry.center.x,
+            location.y - QuotaRingGeometry.center.y
+        )
+        return activeRadii.contains { abs(distance - $0) <= hitSlop }
+    }
+}
+
+struct DualQuotaRing: View {
+    let fiveHourQuota: RateWindow?
+    let sevenDayQuota: RateWindow?
+    let quotaReadSucceeded: Bool
+    let quotaIsStale: Bool
+    let language: WidgetLanguage
+    let visualEnergyMode: VisualEnergyMode
+    let animationMode: ParticleAnimationMode
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isPointerOverRing = false
+
+    private var presentation: QuotaRingPresentation {
+        QuotaRingPresentation(
+            fiveHourQuota: fiveHourQuota,
+            sevenDayQuota: sevenDayQuota
+        )
+    }
 
     var body: some View {
         ZStack {
-            QuotaRingSegment(
-                percent: primary?.remainingPercent ?? 0,
-                available: primary != nil,
-                startColor: quotaPrimaryStartColor,
-                endColor: quotaPrimaryEndColor,
-                trackColor: quotaPrimaryTrackColor,
-                lineWidth: 16
-            )
-            .frame(width: 145, height: 145)
-
-            QuotaRingSegment(
-                percent: secondary?.remainingPercent ?? 0,
-                available: secondary != nil,
-                startColor: quotaSecondaryStartColor,
-                endColor: quotaSecondaryEndColor,
-                trackColor: quotaSecondaryTrackColor,
-                lineWidth: 16
-            )
-            .frame(width: 107, height: 107)
-
-            if !accessibilityReduceMotion,
-               primary != nil || secondary != nil {
-                DualQuotaRingParticles(
-                    primaryProgress: progress(primary),
-                    secondaryProgress: progress(secondary)
+            ForEach(presentation.items) { item in
+                QuotaRingSegment(
+                    percent: item.window.remainingPercent,
+                    startColor: item.kind.startColor,
+                    endColor: item.kind.endColor,
+                    trackColor: WidgetPalette.surfaceTrack,
+                    lineWidth: QuotaRingGeometry.lineWidth
                 )
-                .frame(width: 145, height: 145)
+                .frame(
+                    width: presentation.diameter(for: item),
+                    height: presentation.diameter(for: item)
+                )
+            }
+
+            if presentation.topology != .none {
+                DualQuotaRingParticles(
+                    lanes: presentation.particleLanes,
+                    energyMode: visualEnergyMode,
+                    animationMode: animationMode,
+                    reduceMotion: reduceMotion,
+                    isPointerOverRing: isPointerOverRing
+                )
+                .frame(
+                    width: QuotaRingGeometry.outerDiameter,
+                    height: QuotaRingGeometry.outerDiameter
+                )
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             }
 
-            Circle()
-                .fill(WidgetPalette.surfaceTrack)
-                .frame(width: 72, height: 72)
-
-            VStack(spacing: 4) {
-                QuotaRingLabel(
-                    title: "5h",
-                    value: remainingText(primary),
-                    color: quotaPrimaryColor
+            switch presentation.topology {
+            case .none:
+                QuotaUnavailablePlaceholder(
+                    isAuthoritative: quotaReadSucceeded,
+                    language: language
                 )
-                QuotaRingLabel(
-                    title: "7d",
-                    value: remainingText(secondary),
-                    color: quotaSecondaryColor
+            case .single:
+                Circle()
+                    .fill(WidgetPalette.surfaceTrack)
+                    .frame(
+                        width: QuotaRingGeometry.singleCenterDiameter,
+                        height: QuotaRingGeometry.singleCenterDiameter
+                    )
+                if let item = presentation.items.first {
+                    SingleQuotaRingLabel(
+                        item: item,
+                        language: language,
+                        isStale: quotaIsStale
+                    )
+                }
+            case .dual:
+                Circle()
+                    .fill(WidgetPalette.surfaceTrack)
+                    .frame(
+                        width: QuotaRingGeometry.dualCenterDiameter,
+                        height: QuotaRingGeometry.dualCenterDiameter
+                    )
+                VStack(spacing: 4) {
+                    ForEach(presentation.items) { item in
+                        QuotaRingLabel(
+                            title: item.kind.compactTitle,
+                            value: item.remainingText,
+                            color: item.kind.color
+                        )
+                    }
+                    Text(
+                        quotaIsStale
+                            ? language.text("旧快照", "stale")
+                            : language.text("剩余", "left")
+                    )
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .onContinuousHover { phase in
+            let isOverRing: Bool
+            switch phase {
+            case let .active(location):
+                isOverRing = QuotaRingHoverTarget.contains(
+                    location,
+                    activeRadii: presentation.activeRadii
                 )
-                Text(language.text("剩余", "left"))
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
+            case .ended:
+                isOverRing = false
+            }
+            if isPointerOverRing != isOverRing {
+                isPointerOverRing = isOverRing
             }
         }
     }
 
-    private func remainingText(_ window: RateWindow?) -> String {
-        guard let window else { return "--" }
-        return "\(Int(window.remainingPercent.rounded()))%"
-    }
-
-    private func progress(_ window: RateWindow?) -> CGFloat? {
-        window.map { CGFloat(max(0, min(1, $0.remainingPercent / 100))) }
+    private var accessibilityLabel: String {
+        guard !presentation.items.isEmpty else {
+            return quotaReadSucceeded
+                ? language.text("当前无额度限制", "No active quota limits")
+                : language.text("暂无额度数据", "No quota data")
+        }
+        let values = presentation.items.map { item in
+            "\(item.kind.compactTitle) \(item.remainingText)"
+        }.joined(separator: language.text("，", ", "))
+        let base = language.text("额度剩余 \(values)", "Quota remaining \(values)")
+        return quotaIsStale
+            ? "\(base) · \(language.text("旧快照", "stale snapshot"))"
+            : base
     }
 }
 
 struct QuotaRingSegment: View {
     let percent: Double
-    let available: Bool
     let startColor: RingRGBColor
     let endColor: RingRGBColor
     let trackColor: Color
     let lineWidth: CGFloat
 
     var body: some View {
-        Canvas { context, size in
-            let diameter = min(size.width, size.height)
-            let progress = available ? CGFloat(max(0, min(1, percent / 100))) : 0
-            let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let radius = max(0, (diameter - lineWidth) / 2)
-            let startDegrees = -90.0
-
-            if progress < 0.999 {
-                let track = arcPath(
-                    center: center,
-                    radius: radius,
-                    from: progress,
-                    to: 1,
-                    startDegrees: startDegrees
-                )
-                context.stroke(
-                    track,
-                    with: .color(trackColor),
-                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt)
-                )
-            }
+        let progress = CGFloat(max(0, min(1, percent / 100)))
+        ZStack {
+            Circle()
+                .strokeBorder(trackColor, lineWidth: lineWidth)
 
             if progress > 0.001 {
-                let segmentCount = max(240, Int(ceil(progress * 1_080)))
-                let segmentLength = progress / CGFloat(segmentCount)
-                let overlap = min(segmentLength * 0.65, CGFloat(0.001))
-                for index in 0..<segmentCount {
-                    let rawStart = CGFloat(index) / CGFloat(segmentCount) * progress
-                    let rawEnd = CGFloat(index + 1) / CGFloat(segmentCount) * progress
-                    let t0 = max(0, rawStart - overlap)
-                    let t1 = min(progress, rawEnd + overlap)
-                    let color = startColor.mixed(to: endColor, fraction: Double(index + 1) / Double(segmentCount)).color
-                    let segment = arcPath(
-                        center: center,
-                        radius: radius,
-                        from: t0,
-                        to: t1,
-                        startDegrees: startDegrees
+                Circle()
+                    .inset(by: lineWidth / 2)
+                    .trim(from: 0, to: progress)
+                    .stroke(
+                        AngularGradient(
+                            colors: [startColor.color, endColor.color],
+                            center: .center,
+                            startAngle: .degrees(0),
+                            endAngle: .degrees(max(1, Double(progress) * 360))
+                        ),
+                        style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                     )
-                    context.stroke(
-                        segment,
-                        with: .color(color),
-                        style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt)
-                    )
-                }
-
-                let startPoint = arcPoint(center: center, radius: radius, progress: 0, startDegrees: startDegrees)
-                let endPoint = arcPoint(center: center, radius: radius, progress: progress, startDegrees: startDegrees)
-                context.fill(
-                    Path(ellipseIn: CGRect(x: startPoint.x - lineWidth / 2, y: startPoint.y - lineWidth / 2, width: lineWidth, height: lineWidth)),
-                    with: .color(startColor.color)
-                )
-                context.fill(
-                    Path(ellipseIn: CGRect(x: endPoint.x - lineWidth / 2, y: endPoint.y - lineWidth / 2, width: lineWidth, height: lineWidth)),
-                    with: .color(endColor.color)
-                )
+                    .rotationEffect(.degrees(-90))
             }
         }
     }
+}
 
-    private func arcPath(center: CGPoint, radius: CGFloat, from start: CGFloat, to end: CGFloat, startDegrees: Double) -> Path {
-        var path = Path()
-        path.addArc(
-            center: center,
-            radius: radius,
-            startAngle: .degrees(startDegrees + Double(start) * 360),
-            endAngle: .degrees(startDegrees + Double(end) * 360),
-            clockwise: false
-        )
-        return path
-    }
-
-    private func arcPoint(center: CGPoint, radius: CGFloat, progress: CGFloat, startDegrees: Double) -> CGPoint {
-        let radians = (startDegrees + Double(progress) * 360) * .pi / 180
-        return CGPoint(
-            x: center.x + CGFloat(cos(radians)) * radius,
-            y: center.y + CGFloat(sin(radians)) * radius
-        )
+private enum QuotaParticleRenderPolicy {
+    static func shouldRender(
+        hasProgress: Bool,
+        energyMode: VisualEnergyMode,
+        animationMode: ParticleAnimationMode,
+        reduceMotion: Bool,
+        isPointerOverRing: Bool,
+        isLowPowerModeEnabled: Bool,
+        thermalState: ProcessInfo.ThermalState,
+        appIsActive: Bool,
+        appIsHidden: Bool,
+        appIsFrontmost: Bool,
+        windowIsVisible: Bool,
+        windowIsMiniaturized: Bool,
+        windowIsKey: Bool,
+        windowIsOnActiveSpace: Bool,
+        windowIsOccluded: Bool
+    ) -> Bool {
+        hasProgress
+            && energyMode == .normal
+            && !reduceMotion
+            && !isLowPowerModeEnabled
+            && thermalState == .nominal
+            && appIsActive
+            && !appIsHidden
+            && appIsFrontmost
+            && windowIsVisible
+            && !windowIsMiniaturized
+            && windowIsKey
+            && windowIsOnActiveSpace
+            && !windowIsOccluded
+            && (animationMode == .standard || isPointerOverRing)
     }
 }
 
@@ -4354,24 +4880,58 @@ private struct DualQuotaRingParticles: NSViewRepresentable {
         ParticleStyle(phase: 0.99, speed: 0.108, radialOffset: 1.9, diameter: 1.6, opacity: 0.60)
     ]
 
-    let primaryProgress: CGFloat?
-    let secondaryProgress: CGFloat?
+    static var maximumParticleRadialExtentForTesting: CGFloat {
+        styles.map { abs($0.radialOffset) + $0.diameter / 2 }.max() ?? 0
+    }
+
+    let lanes: [QuotaParticleLane]
+    let energyMode: VisualEnergyMode
+    let animationMode: ParticleAnimationMode
+    let reduceMotion: Bool
+    let isPointerOverRing: Bool
 
     func makeNSView(context: Context) -> QuotaRingParticleHostView {
-        let view = QuotaRingParticleHostView()
-        view.configure(primaryProgress: primaryProgress, secondaryProgress: secondaryProgress)
+        let view = QuotaRingParticleHostView(frame: .zero)
+        view.configure(
+            lanes: lanes,
+            energyMode: energyMode,
+            animationMode: animationMode,
+            reduceMotion: reduceMotion,
+            isPointerOverRing: isPointerOverRing
+        )
         return view
     }
 
     func updateNSView(_ nsView: QuotaRingParticleHostView, context: Context) {
-        nsView.configure(primaryProgress: primaryProgress, secondaryProgress: secondaryProgress)
+        nsView.configure(
+            lanes: lanes,
+            energyMode: energyMode,
+            animationMode: animationMode,
+            reduceMotion: reduceMotion,
+            isPointerOverRing: isPointerOverRing
+        )
+    }
+
+    static func dismantleNSView(_ nsView: QuotaRingParticleHostView, coordinator: ()) {
+        nsView.prepareForRemoval()
     }
 
     final class QuotaRingParticleHostView: NSView {
         private let particleContainer = CALayer()
-        private var primaryProgress: CGFloat?
-        private var secondaryProgress: CGFloat?
+        private var lanes: [QuotaParticleLane] = []
+        private var energyMode: VisualEnergyMode = .suspended
+        private var animationMode: ParticleAnimationMode = .standard
+        private var reduceMotion = false
+        private var isPointerOverRing = false
         private var renderedSize = CGSize.zero
+        private var renderedScale: CGFloat = 0
+        private var isRenderingParticles = false
+        private var isPreparedForRemoval = false
+        private var testingEligibilityOverride: Bool?
+        private var windowObservers: [NSObjectProtocol] = []
+        private var applicationObservers: [NSObjectProtocol] = []
+        private var processObservers: [NSObjectProtocol] = []
+        private var workspaceObservers: [NSObjectProtocol] = []
 
         override var isFlipped: Bool { true }
 
@@ -4382,58 +4942,287 @@ private struct DualQuotaRingParticles: NSViewRepresentable {
             particleContainer.masksToBounds = false
             particleContainer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
             layer?.addSublayer(particleContainer)
+            installLifecycleObservers()
         }
 
         required init?(coder: NSCoder) {
             nil
         }
 
+        deinit {
+            removeLifecycleObservers()
+            removeWindowObservers()
+        }
+
+        func configure(
+            lanes: [QuotaParticleLane],
+            energyMode: VisualEnergyMode,
+            animationMode: ParticleAnimationMode,
+            reduceMotion: Bool,
+            isPointerOverRing: Bool
+        ) {
+            guard !isPreparedForRemoval else { return }
+            let lanes = lanes.map { lane in
+                QuotaParticleLane(
+                    radius: lane.radius,
+                    progress: clampedProgress(lane.progress),
+                    maximumCount: lane.maximumCount,
+                    phaseOffset: lane.phaseOffset
+                )
+            }
+            let lanesChanged = lanes != self.lanes
+
+            self.lanes = lanes
+            self.energyMode = energyMode
+            self.animationMode = animationMode
+            self.reduceMotion = reduceMotion
+            self.isPointerOverRing = isPointerOverRing
+
+            reconcileRendering(forceRebuild: lanesChanged)
+        }
+
+        func prepareForRemoval() {
+            guard !isPreparedForRemoval else { return }
+            isPreparedForRemoval = true
+            clearParticles()
+            removeWindowObservers()
+            removeLifecycleObservers()
+        }
+
+        func setEligibilityOverrideForTesting(_ isEligible: Bool?) {
+            testingEligibilityOverride = isEligible
+            reconcileRendering()
+        }
+
+        var particleSublayerCountForTesting: Int {
+            particleContainer.sublayers?.count ?? 0
+        }
+
+        var particleAnimationCountForTesting: Int {
+            particleContainer.sublayers?.reduce(0) { count, layer in
+                count + (layer.animationKeys()?.count ?? 0)
+            } ?? 0
+        }
+
+        var particleAnimationPathsFitRingStrokeForTesting: Bool {
+            guard let particles = particleContainer.sublayers, !particles.isEmpty else { return false }
+            let center = CGPoint(x: bounds.midX, y: bounds.midY)
+            let halfLineWidth = QuotaRingGeometry.lineWidth / 2
+
+            return particles.allSatisfy { particle in
+                let halfDiagonal = hypot(particle.bounds.width / 2, particle.bounds.height / 2)
+                guard pointFitsRingStroke(
+                    particle.position,
+                    center: center,
+                    halfDiagonal: halfDiagonal,
+                    halfLineWidth: halfLineWidth
+                ),
+                let group = particle.animation(forKey: "quota-flow") as? CAAnimationGroup,
+                let position = group.animations?.compactMap({ $0 as? CAKeyframeAnimation })
+                    .first(where: { $0.keyPath == "position" }),
+                let path = position.path
+                else { return false }
+
+                var pathFits = true
+                var previousPoint: CGPoint?
+                path.applyWithBlock { elementPointer in
+                    guard pathFits else { return }
+                    let element = elementPointer.pointee
+                    switch element.type {
+                    case .moveToPoint:
+                        pathFits = pointFitsRingStroke(
+                            element.points[0],
+                            center: center,
+                            halfDiagonal: halfDiagonal,
+                            halfLineWidth: halfLineWidth
+                        )
+                        previousPoint = element.points[0]
+                    case .addLineToPoint:
+                        guard let segmentStart = previousPoint else {
+                            pathFits = false
+                            return
+                        }
+                        let point = element.points[0]
+                        let halfSegmentLength = hypot(
+                            point.x - segmentStart.x,
+                            point.y - segmentStart.y
+                        ) / 2
+                        pathFits = pointFitsRingStroke(
+                            segmentStart,
+                            center: center,
+                            halfDiagonal: halfDiagonal + halfSegmentLength,
+                            halfLineWidth: halfLineWidth
+                        ) && pointFitsRingStroke(
+                            point,
+                            center: center,
+                            halfDiagonal: halfDiagonal + halfSegmentLength,
+                            halfLineWidth: halfLineWidth
+                        )
+                        previousPoint = point
+                    case .closeSubpath:
+                        break
+                    case .addQuadCurveToPoint, .addCurveToPoint:
+                        pathFits = false
+                    @unknown default:
+                        pathFits = false
+                    }
+                }
+                return pathFits
+            }
+        }
+
         override func layout() {
             super.layout()
-            guard renderedSize != bounds.size else { return }
-            renderedSize = bounds.size
+            let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+            let geometryChanged = renderedSize != bounds.size || abs(renderedScale - scale) > 0.01
+
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             particleContainer.frame = bounds
+            particleContainer.contentsScale = scale
             CATransaction.commit()
+
+            renderedSize = bounds.size
+            renderedScale = scale
+            reconcileRendering(forceRebuild: geometryChanged)
+        }
+
+        override func viewDidChangeBackingProperties() {
+            super.viewDidChangeBackingProperties()
+            renderedScale = 0
+            needsLayout = true
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            removeWindowObservers()
+            guard !isPreparedForRemoval, let window else {
+                clearParticles()
+                return
+            }
+
+            let names: [Notification.Name] = [
+                NSWindow.didBecomeKeyNotification,
+                NSWindow.didResignKeyNotification,
+                NSWindow.didChangeOcclusionStateNotification,
+                NSWindow.didMiniaturizeNotification,
+                NSWindow.didDeminiaturizeNotification,
+                NSWindow.willCloseNotification
+            ]
+            windowObservers = names.map { name in
+                NotificationCenter.default.addObserver(
+                    forName: name,
+                    object: window,
+                    queue: .main
+                ) { [weak self] notification in
+                    if notification.name == NSWindow.willCloseNotification {
+                        self?.clearParticles()
+                    } else {
+                        self?.reconcileRendering()
+                    }
+                }
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                self?.reconcileRendering()
+            }
+        }
+
+        private func reconcileRendering(forceRebuild: Bool = false) {
+            guard !isPreparedForRemoval else {
+                clearParticles()
+                return
+            }
+            guard shouldRenderParticles else {
+                clearParticles()
+                return
+            }
+            guard bounds.width > 0, bounds.height > 0 else { return }
+            guard forceRebuild || !isRenderingParticles else { return }
             rebuildAnimations()
         }
 
-        func configure(primaryProgress: CGFloat?, secondaryProgress: CGFloat?) {
-            let primary = clampedProgress(primaryProgress)
-            let secondary = clampedProgress(secondaryProgress)
-            guard !equalProgress(primary, self.primaryProgress)
-                || !equalProgress(secondary, self.secondaryProgress)
-            else { return }
+        private var shouldRenderParticles: Bool {
+            if let testingEligibilityOverride {
+                return testingEligibilityOverride
+                    && lanes.contains { $0.progress != nil }
+                    && (animationMode == .standard || isPointerOverRing)
+            }
+            guard let window else { return false }
+            let processInfo = ProcessInfo.processInfo
+            let currentProcessIdentifier = processInfo.processIdentifier
+            let frontmostProcessIdentifier = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            return QuotaParticleRenderPolicy.shouldRender(
+                hasProgress: lanes.contains { $0.progress != nil },
+                energyMode: energyMode,
+                animationMode: animationMode,
+                reduceMotion: reduceMotion,
+                isPointerOverRing: pointerIsActuallyOverRing(in: window),
+                isLowPowerModeEnabled: processInfo.isLowPowerModeEnabled,
+                thermalState: processInfo.thermalState,
+                appIsActive: NSApp.isActive,
+                appIsHidden: NSApp.isHidden,
+                appIsFrontmost: frontmostProcessIdentifier == currentProcessIdentifier,
+                windowIsVisible: window.isVisible,
+                windowIsMiniaturized: window.isMiniaturized,
+                windowIsKey: window.isKeyWindow,
+                windowIsOnActiveSpace: window.isOnActiveSpace,
+                windowIsOccluded: !window.occlusionState.contains(.visible)
+            )
+        }
 
-            self.primaryProgress = primary
-            self.secondaryProgress = secondary
-            rebuildAnimations()
+        private func pointerIsActuallyOverRing(in window: NSWindow) -> Bool {
+            let location = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            return QuotaRingHoverTarget.contains(
+                location,
+                activeRadii: lanes.map(\.radius)
+            )
+        }
+
+        private func pointFitsRingStroke(
+            _ point: CGPoint,
+            center: CGPoint,
+            halfDiagonal: CGFloat,
+            halfLineWidth: CGFloat
+        ) -> Bool {
+            let radius = hypot(point.x - center.x, point.y - center.y)
+            guard let centerlineDistance = lanes
+                .map({ abs(radius - $0.radius) })
+                .min()
+            else { return false }
+            return centerlineDistance + halfDiagonal <= halfLineWidth + 0.001
         }
 
         private func rebuildAnimations() {
-            guard bounds.width > 0, bounds.height > 0 else { return }
+            clearParticles()
+            guard shouldRenderParticles else { return }
 
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            particleContainer.sublayers?.forEach { $0.removeFromSuperlayer() }
-
             let center = CGPoint(x: bounds.midX, y: bounds.midY)
-            addParticles(
-                center: center,
-                radius: 64.5,
-                progress: primaryProgress,
-                maximumCount: 17,
-                phaseOffset: 0
-            )
-            addParticles(
-                center: center,
-                radius: 45.5,
-                progress: secondaryProgress,
-                maximumCount: 12,
-                phaseOffset: 0.31
-            )
+            lanes.forEach { lane in
+                addParticles(
+                    center: center,
+                    radius: lane.radius,
+                    progress: lane.progress,
+                    maximumCount: lane.maximumCount,
+                    phaseOffset: lane.phaseOffset
+                )
+            }
             CATransaction.commit()
+            isRenderingParticles = !(particleContainer.sublayers?.isEmpty ?? true)
+        }
+
+        private func clearParticles() {
+            guard isRenderingParticles || !(particleContainer.sublayers?.isEmpty ?? true) else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            particleContainer.sublayers?.forEach { particle in
+                particle.removeAllAnimations()
+                particle.removeFromSuperlayer()
+            }
+            CATransaction.commit()
+            isRenderingParticles = false
         }
 
         private func addParticles(
@@ -4555,6 +5344,11 @@ private struct DualQuotaRingParticles: NSViewRepresentable {
             animation.duration = duration
             animation.repeatCount = .infinity
             animation.timingFunction = CAMediaTimingFunction(name: .linear)
+            animation.preferredFrameRateRange = CAFrameRateRange(
+                minimum: 30,
+                maximum: 60,
+                preferred: 60
+            )
             animation.beginTime = CACurrentMediaTime()
             let rawOffset = (duration * phase - lag).truncatingRemainder(dividingBy: duration)
             animation.timeOffset = rawOffset >= 0 ? rawOffset : rawOffset + duration
@@ -4615,16 +5409,466 @@ private struct DualQuotaRingParticles: NSViewRepresentable {
             return max(0, min(1, progress))
         }
 
-        private func equalProgress(_ lhs: CGFloat?, _ rhs: CGFloat?) -> Bool {
-            switch (lhs, rhs) {
-            case (.none, .none):
-                return true
-            case let (.some(lhs), .some(rhs)):
-                return abs(lhs - rhs) < 0.0001
-            default:
-                return false
+        private func installLifecycleObservers() {
+            let notificationCenter = NotificationCenter.default
+            applicationObservers = [
+                NSApplication.didBecomeActiveNotification,
+                NSApplication.didResignActiveNotification,
+                NSApplication.didHideNotification,
+                NSApplication.didUnhideNotification
+            ].map { name in
+                notificationCenter.addObserver(
+                    forName: name,
+                    object: NSApp,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.reconcileRendering()
+                    DispatchQueue.main.async { [weak self] in
+                        self?.reconcileRendering()
+                    }
+                }
+            }
+
+            processObservers = [
+                Notification.Name.NSProcessInfoPowerStateDidChange,
+                ProcessInfo.thermalStateDidChangeNotification
+            ].map { name in
+                notificationCenter.addObserver(
+                    forName: name,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.reconcileRendering()
+                }
+            }
+
+            workspaceObservers = [
+                NSWorkspace.activeSpaceDidChangeNotification,
+                NSWorkspace.didActivateApplicationNotification
+            ].map { name in
+                NSWorkspace.shared.notificationCenter.addObserver(
+                    forName: name,
+                    object: nil,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.reconcileRendering()
+                }
             }
         }
+
+        private func removeWindowObservers() {
+            windowObservers.forEach(NotificationCenter.default.removeObserver)
+            windowObservers.removeAll()
+        }
+
+        private func removeLifecycleObservers() {
+            applicationObservers.forEach(NotificationCenter.default.removeObserver)
+            applicationObservers.removeAll()
+            processObservers.forEach(NotificationCenter.default.removeObserver)
+            processObservers.removeAll()
+            workspaceObservers.forEach(NSWorkspace.shared.notificationCenter.removeObserver)
+            workspaceObservers.removeAll()
+        }
+    }
+}
+
+private enum QuotaParticleAnimationSelfTest {
+    static func run() -> Bool {
+        var failures: [String] = []
+
+        func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
+            if !condition() {
+                failures.append(message)
+            }
+        }
+
+        func renders(
+            hasProgress: Bool = true,
+            energyMode: VisualEnergyMode = .normal,
+            animationMode: ParticleAnimationMode = .standard,
+            reduceMotion: Bool = false,
+            isPointerOverRing: Bool = false,
+            isLowPowerModeEnabled: Bool = false,
+            thermalState: ProcessInfo.ThermalState = .nominal,
+            appIsActive: Bool = true,
+            appIsHidden: Bool = false,
+            appIsFrontmost: Bool = true,
+            windowIsVisible: Bool = true,
+            windowIsMiniaturized: Bool = false,
+            windowIsKey: Bool = true,
+            windowIsOnActiveSpace: Bool = true,
+            windowIsOccluded: Bool = false
+        ) -> Bool {
+            QuotaParticleRenderPolicy.shouldRender(
+                hasProgress: hasProgress,
+                energyMode: energyMode,
+                animationMode: animationMode,
+                reduceMotion: reduceMotion,
+                isPointerOverRing: isPointerOverRing,
+                isLowPowerModeEnabled: isLowPowerModeEnabled,
+                thermalState: thermalState,
+                appIsActive: appIsActive,
+                appIsHidden: appIsHidden,
+                appIsFrontmost: appIsFrontmost,
+                windowIsVisible: windowIsVisible,
+                windowIsMiniaturized: windowIsMiniaturized,
+                windowIsKey: windowIsKey,
+                windowIsOnActiveSpace: windowIsOnActiveSpace,
+                windowIsOccluded: windowIsOccluded
+            )
+        }
+
+        func quotaWindow(usedPercent: Double, durationMins: Int) -> RateWindow {
+            RateWindow(
+                usedPercent: usedPercent,
+                windowDurationMins: durationMins,
+                resetsAt: Date(timeIntervalSince1970: 1_800_000_000)
+            )
+        }
+
+        let fullFiveHour = quotaWindow(usedPercent: 0, durationMins: 300)
+        let fullSevenDay = quotaWindow(usedPercent: 0, durationMins: 10_080)
+        let noQuotaPresentation = QuotaRingPresentation(
+            fiveHourQuota: nil,
+            sevenDayQuota: nil
+        )
+        let fiveHourOnlyPresentation = QuotaRingPresentation(
+            fiveHourQuota: fullFiveHour,
+            sevenDayQuota: nil
+        )
+        let sevenDayOnlyPresentation = QuotaRingPresentation(
+            fiveHourQuota: nil,
+            sevenDayQuota: fullSevenDay
+        )
+        let dualPresentation = QuotaRingPresentation(
+            fiveHourQuota: fullFiveHour,
+            sevenDayQuota: fullSevenDay
+        )
+
+        expect(noQuotaPresentation.topology == .none, "zero quota windows should use the empty presentation")
+        expect(noQuotaPresentation.items.isEmpty, "empty presentation should not expose reset rows")
+        expect(noQuotaPresentation.particleLanes.isEmpty, "empty presentation should not expose particle lanes")
+        expect(fiveHourOnlyPresentation.topology == .single, "5h-only quota should use a single ring")
+        expect(
+            fiveHourOnlyPresentation.items.map(\.kind) == [.fiveHour],
+            "5h-only presentation should preserve the blue 5h semantic"
+        )
+        expect(sevenDayOnlyPresentation.topology == .single, "7d-only quota should use a single ring")
+        expect(
+            sevenDayOnlyPresentation.items.map(\.kind) == [.sevenDay],
+            "7d-only presentation should preserve the purple 7d semantic"
+        )
+        expect(
+            sevenDayOnlyPresentation.particleLanes.count == 1
+                && sevenDayOnlyPresentation.particleLanes[0].radius == QuotaRingGeometry.outerRadius
+                && sevenDayOnlyPresentation.particleLanes[0].maximumCount == 17,
+            "a single 7d quota should expand onto the full outer particle lane"
+        )
+        expect(dualPresentation.topology == .dual, "two quota windows should retain the dual-ring presentation")
+        expect(
+            dualPresentation.items.map(\.kind) == [.fiveHour, .sevenDay],
+            "dual presentation should retain the stable 5h then 7d order"
+        )
+        expect(
+            dualPresentation.activeRadii == [
+                QuotaRingGeometry.outerRadius,
+                QuotaRingGeometry.innerRadius
+            ],
+            "dual presentation should expose both active ring radii"
+        )
+        expect(
+            fiveHourOnlyPresentation.items.count == 1
+                && sevenDayOnlyPresentation.items.count == 1
+                && dualPresentation.items.count == 2,
+            "reset summary should receive only real quota rows"
+        )
+        expect(
+            QuotaRingGeometry.singleCenterDiameter == 110,
+            "single-ring center should preserve the dual-ring inner-edge clearance"
+        )
+
+        expect(renders(), "default mode should render in a focused frontmost window")
+        expect(
+            !renders(animationMode: .powerSaving),
+            "power-saving mode should stay empty without ring hover"
+        )
+        expect(
+            renders(animationMode: .powerSaving, isPointerOverRing: true),
+            "power-saving mode should render while the ring is hovered"
+        )
+        expect(
+            QuotaRingHoverTarget.contains(CGPoint(
+                x: QuotaRingGeometry.center.x,
+                y: QuotaRingGeometry.center.y - QuotaRingGeometry.outerRadius
+            ), activeRadii: dualPresentation.activeRadii),
+            "outer ring should be a power-saving hover target"
+        )
+        expect(
+            QuotaRingHoverTarget.contains(CGPoint(
+                x: QuotaRingGeometry.center.x + QuotaRingGeometry.innerRadius,
+                y: QuotaRingGeometry.center.y
+            ), activeRadii: dualPresentation.activeRadii),
+            "inner ring should be a power-saving hover target"
+        )
+        expect(
+            !QuotaRingHoverTarget.contains(
+                CGPoint(
+                    x: QuotaRingGeometry.center.x + QuotaRingGeometry.innerRadius,
+                    y: QuotaRingGeometry.center.y
+                ),
+                activeRadii: sevenDayOnlyPresentation.activeRadii
+            ),
+            "single-ring mode should not react to the removed inner ring"
+        )
+        expect(
+            !QuotaRingHoverTarget.contains(
+                CGPoint(
+                    x: QuotaRingGeometry.center.x,
+                    y: QuotaRingGeometry.center.y - QuotaRingGeometry.outerRadius
+                ),
+                activeRadii: noQuotaPresentation.activeRadii
+            ),
+            "empty mode should not expose a hidden hover target"
+        )
+        expect(
+            !QuotaRingHoverTarget.contains(
+                QuotaRingGeometry.center,
+                activeRadii: dualPresentation.activeRadii
+            ),
+            "center labels should not trigger power-saving particles"
+        )
+        expect(
+            !QuotaRingHoverTarget.contains(
+                CGPoint(x: 0, y: 0),
+                activeRadii: dualPresentation.activeRadii
+            ),
+            "ring component corners should not trigger power-saving particles"
+        )
+        expect(
+            abs(QuotaRingGeometry.outerRadius - 64.5) < 0.0001
+                && abs(QuotaRingGeometry.innerRadius - 45.5) < 0.0001,
+            "inset ring strokes should share the original particle centerline radii"
+        )
+        expect(
+            DualQuotaRingParticles.maximumParticleRadialExtentForTesting
+                <= QuotaRingGeometry.lineWidth / 2,
+            "every particle pixel should remain inside the aligned ring stroke"
+        )
+        expect(!renders(hasProgress: false), "missing quota progress should not allocate particles")
+        expect(!renders(energyMode: .suspended), "suspended visual energy mode should stop particles")
+        expect(!renders(energyMode: .constrained), "constrained visual energy mode should stop particles")
+        expect(!renders(reduceMotion: true), "Reduce Motion should stop particles")
+        expect(!renders(isLowPowerModeEnabled: true), "Low Power Mode should stop particles")
+        expect(!renders(thermalState: .fair), "thermal pressure should stop particles")
+        expect(!renders(appIsActive: false), "inactive app should stop particles")
+        expect(!renders(appIsHidden: true), "hidden app should stop particles")
+        expect(!renders(appIsFrontmost: false), "non-frontmost app should stop particles")
+        expect(!renders(windowIsVisible: false), "closed or ordered-out window should stop particles")
+        expect(!renders(windowIsMiniaturized: true), "miniaturized window should stop particles")
+        expect(!renders(windowIsKey: false), "unfocused window should stop particles")
+        expect(!renders(windowIsOnActiveSpace: false), "window on another Space should stop particles")
+        expect(!renders(windowIsOccluded: true), "occluded window should stop particles")
+
+        let host = DualQuotaRingParticles.QuotaRingParticleHostView(
+            frame: NSRect(
+                x: 0,
+                y: 0,
+                width: QuotaRingGeometry.outerDiameter,
+                height: QuotaRingGeometry.outerDiameter
+            )
+        )
+        host.setEligibilityOverrideForTesting(true)
+        host.configure(
+            lanes: [
+                QuotaParticleLane(
+                    radius: QuotaRingGeometry.outerRadius,
+                    progress: 0.03,
+                    maximumCount: 17,
+                    phaseOffset: 0
+                ),
+                QuotaParticleLane(
+                    radius: QuotaRingGeometry.innerRadius,
+                    progress: 0.03,
+                    maximumCount: 12,
+                    phaseOffset: 0.31
+                )
+            ],
+            energyMode: .normal,
+            animationMode: .standard,
+            reduceMotion: false,
+            isPointerOverRing: false
+        )
+        expect(
+            host.particleSublayerCountForTesting == 8,
+            "three-percent progress should create the expected sparse particle field"
+        )
+        expect(
+            host.particleAnimationPathsFitRingStrokeForTesting,
+            "sparse particle paths should remain inside both aligned ring strokes"
+        )
+        host.configure(
+            lanes: [
+                QuotaParticleLane(
+                    radius: QuotaRingGeometry.outerRadius,
+                    progress: 0.5,
+                    maximumCount: 17,
+                    phaseOffset: 0
+                ),
+                QuotaParticleLane(
+                    radius: QuotaRingGeometry.innerRadius,
+                    progress: 0.5,
+                    maximumCount: 12,
+                    phaseOffset: 0.31
+                )
+            ],
+            energyMode: .normal,
+            animationMode: .standard,
+            reduceMotion: false,
+            isPointerOverRing: false
+        )
+        expect(
+            host.particleSublayerCountForTesting == 43,
+            "half progress should preserve the original particle density"
+        )
+        expect(
+            host.particleAnimationPathsFitRingStrokeForTesting,
+            "partial particle paths should remain inside both aligned ring strokes"
+        )
+        host.configure(
+            lanes: dualPresentation.particleLanes,
+            energyMode: .normal,
+            animationMode: .standard,
+            reduceMotion: false,
+            isPointerOverRing: false
+        )
+        expect(
+            host.particleSublayerCountForTesting == 56,
+            "full original particle field should create 56 particle and trail layers"
+        )
+        expect(
+            host.particleAnimationCountForTesting == 56,
+            "every original particle and trail layer should run one quota-flow animation group"
+        )
+        expect(
+            host.particleAnimationPathsFitRingStrokeForTesting,
+            "full-circle particle paths should remain inside both aligned ring strokes"
+        )
+        host.configure(
+            lanes: sevenDayOnlyPresentation.particleLanes,
+            energyMode: .normal,
+            animationMode: .standard,
+            reduceMotion: false,
+            isPointerOverRing: false
+        )
+        expect(
+            host.particleSublayerCountForTesting == 32,
+            "full single-ring particle field should use the outer-ring density only"
+        )
+        expect(
+            host.particleAnimationCountForTesting == 32,
+            "every single-ring particle and trail layer should run one animation group"
+        )
+        expect(
+            host.particleAnimationPathsFitRingStrokeForTesting,
+            "single-ring particle paths should fit the active outer stroke"
+        )
+        host.configure(
+            lanes: noQuotaPresentation.particleLanes,
+            energyMode: .normal,
+            animationMode: .standard,
+            reduceMotion: false,
+            isPointerOverRing: false
+        )
+        expect(
+            host.particleSublayerCountForTesting == 0,
+            "empty presentation should immediately remove every particle layer"
+        )
+        host.configure(
+            lanes: dualPresentation.particleLanes,
+            energyMode: .normal,
+            animationMode: .powerSaving,
+            reduceMotion: false,
+            isPointerOverRing: false
+        )
+        expect(
+            host.particleSublayerCountForTesting == 0,
+            "power-saving mode should remove particles before ring hover"
+        )
+        host.configure(
+            lanes: dualPresentation.particleLanes,
+            energyMode: .normal,
+            animationMode: .powerSaving,
+            reduceMotion: false,
+            isPointerOverRing: true
+        )
+        expect(
+            host.particleSublayerCountForTesting == 56,
+            "power-saving ring hover should restore the full original particle field"
+        )
+        host.configure(
+            lanes: dualPresentation.particleLanes,
+            energyMode: .normal,
+            animationMode: .powerSaving,
+            reduceMotion: false,
+            isPointerOverRing: false
+        )
+        expect(
+            host.particleSublayerCountForTesting == 0,
+            "leaving the ring should immediately remove power-saving particles"
+        )
+        host.configure(
+            lanes: dualPresentation.particleLanes,
+            energyMode: .normal,
+            animationMode: .standard,
+            reduceMotion: false,
+            isPointerOverRing: false
+        )
+        host.setEligibilityOverrideForTesting(false)
+        expect(
+            host.particleSublayerCountForTesting == 0,
+            "ineligible state should remove particle sublayers instead of pausing them"
+        )
+        expect(
+            host.particleAnimationCountForTesting == 0,
+            "ineligible state should remove all particle animations"
+        )
+        host.prepareForRemoval()
+
+        let suiteName = "codexU.particle-animation-self-test.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            print("particle animation self-test failed: could not create UserDefaults suite")
+            return false
+        }
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        expect(
+            ParticleAnimationMode.storedOrDefault(defaults: defaults) == .standard,
+            "missing particle animation preference should default to standard"
+        )
+        let settings = AppSettings(defaults: defaults)
+        settings.particleAnimationMode = .powerSaving
+        expect(
+            defaults.string(forKey: ParticleAnimationMode.storageKey) == ParticleAnimationMode.powerSaving.rawValue,
+            "particle animation preference should persist immediately"
+        )
+        expect(
+            AppSettings(defaults: defaults).particleAnimationMode == .powerSaving,
+            "particle animation preference should survive AppSettings recreation"
+        )
+        defaults.set("future-mode", forKey: ParticleAnimationMode.storageKey)
+        expect(
+            ParticleAnimationMode.storedOrDefault(defaults: defaults) == .standard,
+            "unknown particle animation preference should fall back to standard"
+        )
+
+        if failures.isEmpty {
+            print("particle animation self-test passed")
+            return true
+        }
+        failures.forEach { print("particle animation self-test failed: \($0)") }
+        return false
     }
 }
 
@@ -4646,32 +5890,85 @@ struct QuotaRingLabel: View {
     }
 }
 
-struct QuotaResetSummary: View {
-    let primary: RateWindow?
-    let secondary: RateWindow?
+private struct SingleQuotaRingLabel: View {
+    let item: QuotaRingItem
+    let language: WidgetLanguage
+    let isStale: Bool
+
+    var body: some View {
+        VStack(spacing: 1) {
+            Text(item.kind.compactTitle)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(item.kind.color)
+            Text(item.remainingText)
+                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+            Text(
+                isStale
+                    ? language.text("旧快照", "stale")
+                    : language.text("剩余", "left")
+            )
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct QuotaUnavailablePlaceholder: View {
+    let isAuthoritative: Bool
     let language: WidgetLanguage
 
     var body: some View {
+        VStack(spacing: 7) {
+            Image(systemName: isAuthoritative ? "infinity.circle" : "gauge")
+                .font(.system(size: 24, weight: .medium))
+            Text(
+                isAuthoritative
+                    ? language.text("当前无额度限制", "No active quota limits")
+                    : language.text("暂无额度数据", "No quota data")
+            )
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundStyle(.secondary)
+        .frame(
+            width: QuotaRingGeometry.singleCenterDiameter,
+            height: QuotaRingGeometry.singleCenterDiameter
+        )
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct QuotaResetSummary: View {
+    let fiveHourQuota: RateWindow?
+    let sevenDayQuota: RateWindow?
+    let language: WidgetLanguage
+
+    private var presentation: QuotaRingPresentation {
+        QuotaRingPresentation(
+            fiveHourQuota: fiveHourQuota,
+            sevenDayQuota: sevenDayQuota
+        )
+    }
+
+    var body: some View {
         VStack(spacing: 4) {
-            QuotaResetLine(
-                title: "5h",
-                window: primary,
-                color: quotaPrimaryColor,
-                language: language
-            )
-            QuotaResetLine(
-                title: "7d",
-                window: secondary,
-                color: quotaSecondaryColor,
-                language: language
-            )
+            ForEach(presentation.items) { item in
+                QuotaResetLine(
+                    title: item.kind.compactTitle,
+                    window: item.window,
+                    color: item.kind.color,
+                    language: language
+                )
+            }
         }
     }
 }
 
 struct QuotaResetLine: View {
     let title: String
-    let window: RateWindow?
+    let window: RateWindow
     let color: Color
     let language: WidgetLanguage
 
@@ -4698,7 +5995,7 @@ struct QuotaResetLine: View {
     }
 
     private var resetText: String {
-        guard let resetsAt = window?.resetsAt else { return "--" }
+        guard let resetsAt = window.resetsAt else { return "--" }
         return resetDateTime(resetsAt, language: language)
     }
 }
@@ -6375,13 +7672,14 @@ struct DashboardCardHeader<Trailing: View>: View {
 struct TaskBoardColumnView: View {
     let column: TaskColumn
     let language: WidgetLanguage
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: taskColumnIcon(column.id))
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(taskAccentColor(column.id))
+                    .foregroundStyle(taskAccentForegroundColor(column.id, colorScheme: colorScheme))
                 Text(localizedTaskColumnTitle(column.id, language: language))
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
@@ -6447,8 +7745,8 @@ struct TaskIssueCard: View {
                 Spacer(minLength: 4)
                 if let updatedAt = item.updatedAt {
                     Text(relativeTimeText(updatedAt, language: language))
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
@@ -6482,11 +7780,12 @@ struct TaskIssueCard: View {
 struct TaskAvatar: View {
     let text: String
     let kind: TaskColumnKind
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Text(text)
             .font(.system(size: 9, weight: .bold, design: .rounded))
-            .foregroundStyle(taskAccentColor(kind).opacity(0.85))
+            .foregroundStyle(taskAccentForegroundColor(kind, colorScheme: colorScheme))
             .frame(width: 18, height: 18)
             .background(
                 Circle()
@@ -6498,6 +7797,7 @@ struct TaskAvatar: View {
 struct TaskChip: View {
     let text: String
     let kind: TaskColumnKind
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 4) {
@@ -6507,16 +7807,16 @@ struct TaskChip: View {
                 .font(.system(size: 9, weight: .bold, design: .rounded))
                 .lineLimit(1)
         }
-        .foregroundStyle(chipColor)
+        .foregroundStyle(chipForegroundColor)
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
         .background(
             Capsule(style: .continuous)
-                .fill(chipColor.opacity(0.13))
+                .fill(chipAccentColor.opacity(0.13))
         )
     }
 
-    private var chipColor: Color {
+    private var chipAccentColor: Color {
         switch text.lowercased() {
         case "high", "urgent":
             return WidgetPalette.statusDanger
@@ -6530,6 +7830,22 @@ struct TaskChip: View {
             return WidgetPalette.statusSuccess
         default:
             return taskAccentColor(kind)
+        }
+    }
+
+    private var chipForegroundColor: Color {
+        guard colorScheme == .light else { return chipAccentColor }
+        switch text.lowercased() {
+        case "high", "urgent":
+            return WidgetPalette.statusDangerLightText
+        case "medium", "active":
+            return WidgetPalette.statusWarningLightText
+        case "cron", "wake":
+            return WidgetPalette.brandSecondaryLightText
+        case "done":
+            return WidgetPalette.statusSuccessLightText
+        default:
+            return taskAccentForegroundColor(kind, colorScheme: colorScheme)
         }
     }
 
@@ -6606,14 +7922,6 @@ struct RingRGBColor: Equatable {
         Color(red: red, green: green, blue: blue)
     }
 
-    func mixed(to other: RingRGBColor, fraction: Double) -> RingRGBColor {
-        let clamped = max(0, min(1, fraction))
-        return RingRGBColor(
-            red: red + (other.red - red) * clamped,
-            green: green + (other.green - green) * clamped,
-            blue: blue + (other.blue - blue) * clamped
-        )
-    }
 }
 
 enum WidgetPalette {
@@ -6630,6 +7938,7 @@ enum WidgetPalette {
     static let brandSecondary = brandSecondaryRGB.color
     static let brandSecondaryStrong = brandSecondaryStrongRGB.color
     static let brandHighlight = brandHighlightRGB.color
+    static let dataFlowParticle = NSColor.white
 
     static let statusSuccess = Color(red: 0.188, green: 0.820, blue: 0.345) // #30D158
     static let statusInfo = Color(red: 0.039, green: 0.518, blue: 1.000) // #0A84FF
@@ -6637,39 +7946,71 @@ enum WidgetPalette {
     static let statusDanger = Color(red: 1.000, green: 0.271, blue: 0.227) // #FF453A
     static let statusNeutral = Color(red: 0.596, green: 0.596, blue: 0.616) // #98989D
     static let dataReasoning = Color(red: 0.749, green: 0.353, blue: 0.949) // #BF5AF2
-    static let dataFlowParticle = NSColor.white
+
+    // Strong semantic foregrounds keep 9 pt labels readable on light glass.
+    static let statusDangerLightText = Color(red: 0.706, green: 0.137, blue: 0.094) // #B42318
+    static let statusWarningLightText = Color(red: 0.502, green: 0.294, blue: 0.000) // #804B00
+    static let statusSuccessLightText = Color(red: 0.078, green: 0.439, blue: 0.224) // #147039
+    static let brandSecondaryLightText = Color(red: 0.384, green: 0.251, blue: 0.773) // #6240C5
+    static let statusNeutralLightText = Color(red: 0.329, green: 0.333, blue: 0.369) // #54555E
 
     static let surfaceTrack = Color.primary.opacity(0.10)
     static let dataZero = statusNeutral.opacity(0.35)
 
-    static func windowTint(_ colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? Color.white.opacity(0.028) : Color.white.opacity(0.050)
-    }
-
-    static func sectionTint(_ colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? Color.white.opacity(0.040) : Color.white.opacity(0.070)
-    }
-
-    static func sectionFill(_ colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? Color.white.opacity(0.070) : Color.white.opacity(0.460)
-    }
-
-    static func sectionStroke(_ colorScheme: ColorScheme) -> Color {
-        colorScheme == .dark ? Color.white.opacity(0.080) : Color.black.opacity(0.060)
-    }
-
-    static func cardFill(_ colorScheme: ColorScheme, elevated: Bool = false) -> Color {
-        if colorScheme == .dark {
-            return Color.white.opacity(elevated ? 0.140 : 0.100)
+    static func windowScrim(_ colorScheme: ColorScheme, reduceTransparency: Bool = false) -> Color {
+        if reduceTransparency {
+            return Color(nsColor: .windowBackgroundColor).opacity(0.94)
         }
-        return Color.white.opacity(elevated ? 0.760 : 0.560)
+        return colorScheme == .dark ? Color.black.opacity(0.080) : Color.white.opacity(0.100)
     }
 
-    static func cardStroke(_ colorScheme: ColorScheme, elevated: Bool = false) -> Color {
+    static func sectionFill(_ colorScheme: ColorScheme, reduceTransparency: Bool = false) -> Color {
+        if reduceTransparency {
+            return Color(nsColor: .controlBackgroundColor).opacity(0.96)
+        }
+        return colorScheme == .dark ? Color.black.opacity(0.060) : Color.white.opacity(0.360)
+    }
+
+    static func sectionStroke(_ colorScheme: ColorScheme, increasedContrast: Bool = false) -> Color {
+        if colorScheme == .dark {
+            return Color.white.opacity(increasedContrast ? 0.240 : 0.120)
+        }
+        return Color.black.opacity(increasedContrast ? 0.180 : 0.080)
+    }
+
+    static func cardFill(
+        _ colorScheme: ColorScheme,
+        elevated: Bool = false,
+        reduceTransparency: Bool = false
+    ) -> Color {
+        if reduceTransparency {
+            return Color(nsColor: .controlBackgroundColor).opacity(elevated ? 1.0 : 0.96)
+        }
         if colorScheme == .dark {
             return Color.white.opacity(elevated ? 0.110 : 0.080)
         }
-        return Color.black.opacity(elevated ? 0.075 : 0.055)
+        return Color.white.opacity(elevated ? 0.680 : 0.520)
+    }
+
+    static func cardStroke(
+        _ colorScheme: ColorScheme,
+        elevated: Bool = false,
+        increasedContrast: Bool = false
+    ) -> Color {
+        if colorScheme == .dark {
+            let base = elevated ? 0.140 : 0.100
+            return Color.white.opacity(increasedContrast ? base + 0.100 : base)
+        }
+        let base = elevated ? 0.100 : 0.070
+        return Color.black.opacity(increasedContrast ? base + 0.100 : base)
+    }
+
+    static func secondaryText(_ colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? Color.white.opacity(0.720) : Color.black.opacity(0.660)
+    }
+
+    static func tertiaryText(_ colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? Color.white.opacity(0.560) : Color.black.opacity(0.560)
     }
 
     static func controlFill(_ colorScheme: ColorScheme) -> Color {
@@ -7041,6 +8382,20 @@ private func taskAccentColor(_ kind: TaskColumnKind) -> Color {
     }
 }
 
+private func taskAccentForegroundColor(_ kind: TaskColumnKind, colorScheme: ColorScheme) -> Color {
+    guard colorScheme == .light else { return taskAccentColor(kind) }
+    switch kind {
+    case .active:
+        return WidgetPalette.statusWarningLightText
+    case .pending:
+        return WidgetPalette.statusNeutralLightText
+    case .scheduled:
+        return WidgetPalette.brandSecondaryLightText
+    case .done:
+        return WidgetPalette.statusSuccessLightText
+    }
+}
+
 private func taskColumnFill(_ kind: TaskColumnKind) -> Color {
     taskAccentColor(kind).opacity(0.065)
 }
@@ -7098,6 +8453,26 @@ private func localizedReaderMessage(_ message: String, language: WidgetLanguage)
     if message.contains("未找到 Codex session 日志") { return "Codex session logs not found" }
     if message.contains("未找到 Codex token_count 事件") { return "Codex token_count events not found" }
     if message.contains("任务看板未找到 SQLite 数据源") { return "Task board SQLite data source not found" }
+    if message.contains("额度响应缺少窗口字段") {
+        return "Codex quota response is missing window fields, so it was not treated as having no active limits"
+    }
+    if message.contains("额度窗口格式无法解析") {
+        return "Codex quota window could not be parsed, so it was not treated as having no active limits"
+    }
+    if message.contains("重复的 5 小时额度窗口") { return "Codex returned duplicate 5-hour quota windows, so that quota is hidden" }
+    if message.contains("重复的 7 天额度窗口") { return "Codex returned duplicate 7-day quota windows, so that quota is hidden" }
+    if message.contains("缺少时长的额度窗口") { return "Codex returned a quota window without a duration, so it was not labeled as 5h or 7d" }
+    if message.contains("未识别的额度窗口") {
+        return message
+            .replacingOccurrences(
+                of: "Codex 返回了未识别的额度窗口（",
+                with: "Codex returned an unknown quota window ("
+            )
+            .replacingOccurrences(
+                of: " 分钟），未将其标注为 5 小时或 7 天",
+                with: " minutes), so it was not labeled as 5h or 7d"
+            )
+    }
     if message.contains("app-server") { return message.replacingOccurrences(of: "未知错误", with: "Unknown error") }
     return message
 }
@@ -7202,7 +8577,7 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
         ] as [String: Any]
     }
 
-    if let primary = snapshot.primary {
+    if let primary = snapshot.fiveHourQuota {
         object["primary"] = [
             "usedPercent": primary.usedPercent,
             "remainingPercent": primary.remainingPercent,
@@ -7211,7 +8586,7 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
         ] as [String: Any]
     }
 
-    if let secondary = snapshot.secondary {
+    if let secondary = snapshot.sevenDayQuota {
         object["secondary"] = [
             "usedPercent": secondary.usedPercent,
             "remainingPercent": secondary.remainingPercent,
@@ -7373,7 +8748,7 @@ final class GlassHostingContainer<Content: View>: NSView {
             let glass = NSGlassEffectView(frame: bounds)
             glass.autoresizingMask = [.width, .height]
             glass.cornerRadius = cornerRadius
-            glass.style = .clear
+            glass.style = .regular
             glass.tintColor = nil
             glass.contentView = host
             addSubview(glass)
@@ -7382,7 +8757,7 @@ final class GlassHostingContainer<Content: View>: NSView {
             material.autoresizingMask = [.width, .height]
             material.material = .hudWindow
             material.blendingMode = .behindWindow
-            material.state = .active
+            material.state = .followsWindowActiveState
             material.wantsLayer = true
             material.layer?.cornerRadius = cornerRadius
             material.layer?.masksToBounds = true
@@ -7442,6 +8817,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     private var statusPopover: NSPopover?
     private var statusPopoverEventMonitors: [Any] = []
     private var statusItemAppearanceObservation: NSKeyValueObservation?
+    private var activeSpaceObserver: NSObjectProtocol?
     private var globalHotKeyRef: EventHotKeyRef?
     private var globalHotKeyHandler: EventHandlerRef?
     private var cancellables = Set<AnyCancellable>()
@@ -7457,6 +8833,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         debugLog("app launched bundle=\(Bundle.main.bundlePath)")
 
         createMainWindow()
+        activeSpaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateTaskBoardPollingActivity()
+        }
         setupStatusItemIfNeeded()
         observeStatusItemUsage()
         observeSettings()
@@ -7531,6 +8914,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     func applicationWillTerminate(_ notification: Notification) {
         closeStatusPopover()
         statusItemAppearanceObservation = nil
+        if let activeSpaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activeSpaceObserver)
+            self.activeSpaceObserver = nil
+        }
         unregisterGlobalHotKey()
         store.stop()
     }
@@ -7540,6 +8927,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
         if window.isVisible, !window.isMiniaturized, window.isKeyWindow {
             window.orderOut(nil)
+            updateTaskBoardPollingActivity()
             return
         }
 
@@ -7548,6 +8936,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
     func applicationDidResignActive(_ notification: Notification) {
         closeStatusPopover()
+        updateTaskBoardPollingActivity()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        updateTaskBoardPollingActivity()
+    }
+
+    func applicationDidHide(_ notification: Notification) {
+        updateTaskBoardPollingActivity()
+    }
+
+    func applicationDidUnhide(_ notification: Notification) {
+        updateTaskBoardPollingActivity()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -7571,6 +8972,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         return true
     }
 
+    func windowDidMiniaturize(_ notification: Notification) {
+        updateTaskBoardPollingActivity()
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        updateTaskBoardPollingActivity()
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        updateTaskBoardPollingActivity()
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        updateTaskBoardPollingActivity()
+    }
+
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        updateTaskBoardPollingActivity()
+    }
+
     private func showMainWindow() {
         guard let window else { return }
         NSApp.setActivationPolicy(.regular)
@@ -7582,12 +9003,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        updateTaskBoardPollingActivity()
     }
 
     private func hideMainWindowAfterClose() {
         closeStatusPopover()
         window?.orderOut(nil)
         NSApp.setActivationPolicy(.accessory)
+        updateTaskBoardPollingActivity()
     }
 
     private func applyMainWindowLevel() {
@@ -7774,6 +9197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         }
 
         guard let button = statusItem?.button else { return }
+        store.refreshIfStale(maximumAge: 5 * 60)
         let popover = NSPopover()
         popover.behavior = .transient
         popover.animates = true
@@ -7803,6 +9227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         )
         statusPopover = popover
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        updateTaskBoardPollingActivity()
         configureStatusPopoverWindow()
         DispatchQueue.main.async { [weak self] in
             self?.configureStatusPopoverWindow()
@@ -7831,12 +9256,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     func popoverDidClose(_ notification: Notification) {
         statusPopover = nil
         removeStatusPopoverEventMonitors()
+        updateTaskBoardPollingActivity()
     }
 
     private func closeStatusPopover() {
         statusPopover?.performClose(nil)
         statusPopover = nil
         removeStatusPopoverEventMonitors()
+        updateTaskBoardPollingActivity()
+    }
+
+    private func updateTaskBoardPollingActivity() {
+        guard let window else {
+            store.setMainWindowActive(false)
+            return
+        }
+        let mainWindowActive = window.isVisible
+            && !window.isMiniaturized
+            && window.isKeyWindow
+            && window.isOnActiveSpace
+            && window.occlusionState.contains(.visible)
+            && NSApp.isActive
+            && !NSApp.isHidden
+        store.setMainWindowActive(mainWindowActive)
     }
 
     private func installStatusPopoverEventMonitors() {
@@ -8109,6 +9551,14 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-status-item") {
             exit(StatusItemPresentationSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-particle-animation") {
+            exit(QuotaParticleAnimationSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-rate-limits") {
+            exit(CodexRateLimitNormalizerSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--self-test-updates") {

@@ -22,8 +22,9 @@ struct ClaudeCodeRuntimeProvider: RuntimeUsageProvider {
             account: AccountInfo(type: "local", planType: "Claude Code", emailPresent: false),
             limitId: scope.runtimeId,
             limitName: "Claude Code local",
-            primary: statusLine.primary,
-            secondary: statusLine.secondary,
+            quotaReadSucceeded: statusLine.hasQuota,
+            fiveHourQuota: statusLine.primary,
+            sevenDayQuota: statusLine.secondary,
             credits: nil,
             cloudLifetimeTokens: nil,
             local: local,
@@ -61,7 +62,7 @@ struct ClaudeCodeRuntimeProvider: RuntimeUsageProvider {
 
 private final class ClaudeCodeTranscriptReader {
     private let fileManager = FileManager.default
-    private let cacheVersion = 1
+    private let cacheVersion = 2
 
     func loadLocalUsage(context: RuntimeLoadContext, messages: inout [String]) -> LocalUsage? {
         let projectsRoot = context.homeDirectory
@@ -79,14 +80,27 @@ private final class ClaudeCodeTranscriptReader {
             return nil
         }
 
-        var cache = readCache(context: context)
+        let cacheState = readCache(context: context)
+        var cache = cacheState.cache
         var summaries: [ClaudeTranscriptSummary] = []
-        var cacheChanged = false
+        var cacheChanged = cacheState.usesLegacySecondPrecision
+        let livePaths = Set(transcriptFiles.map(\.path))
+
+        if cache.entries.keys.contains(where: { !livePaths.contains($0) }) {
+            cache.entries = cache.entries.filter { livePaths.contains($0.key) }
+            cacheChanged = true
+        }
 
         for file in transcriptFiles {
             guard let fingerprint = fingerprint(for: file) else { continue }
             let key = file.path
-            if let entry = cache.entries[key], entry.matches(fingerprint) {
+            if let entry = cache.entries[key],
+               entry.matches(fingerprint)
+                || (cacheState.usesLegacySecondPrecision && entry.matchesLegacySecond(fingerprint)) {
+                if !entry.matches(fingerprint) {
+                    cache.entries[key] = entry.updatingFingerprint(fingerprint)
+                    cacheChanged = true
+                }
                 summaries.append(entry.summary)
                 continue
             }
@@ -94,15 +108,15 @@ private final class ClaudeCodeTranscriptReader {
             let summary = parseTranscript(file: file, fingerprint: fingerprint)
             cache.entries[key] = ClaudeSessionCacheEntry(
                 fileSize: fingerprint.fileSize,
-                modificationDate: fingerprint.modificationDate,
+                modificationTimeNanoseconds: fingerprint.modificationTimeNanoseconds,
                 summary: summary
             )
             cacheChanged = true
             summaries.append(summary)
         }
 
-        if cacheChanged {
-            writeCache(cache, context: context)
+        if cacheChanged, !writeCache(cache, context: context) {
+            messages.append("Claude Code 本地缓存写入失败")
         }
 
         return makeLocalUsage(from: summaries, statistics: context.statistics, messages: &messages)
@@ -511,27 +525,48 @@ private final class ClaudeCodeTranscriptReader {
             .sorted { $0.loadCount > $1.loadCount }
     }
 
-    private func readCache(context: RuntimeLoadContext) -> ClaudeSessionDiskCache {
+    private func readCache(
+        context: RuntimeLoadContext
+    ) -> (cache: ClaudeSessionDiskCache, usesLegacySecondPrecision: Bool) {
         let url = cacheURL(context: context)
         guard let data = try? Data(contentsOf: url) else {
-            return ClaudeSessionDiskCache(version: cacheVersion, entries: [:])
+            return (ClaudeSessionDiskCache(version: cacheVersion, entries: [:]), false)
         }
+
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .millisecondsSince1970
         guard let cache = try? decoder.decode(ClaudeSessionDiskCache.self, from: data),
               cache.version == cacheVersion else {
-            return ClaudeSessionDiskCache(version: cacheVersion, entries: [:])
+            let legacyDecoder = JSONDecoder()
+            legacyDecoder.dateDecodingStrategy = .iso8601
+            guard let legacy = try? legacyDecoder.decode(LegacyClaudeSessionDiskCache.self, from: data),
+                  legacy.version == 1 else {
+                return (ClaudeSessionDiskCache(version: cacheVersion, entries: [:]), false)
+            }
+            let migrated = legacy.entries.mapValues { entry in
+                ClaudeSessionCacheEntry(
+                    fileSize: entry.fileSize,
+                    modificationTimeNanoseconds: entry.modificationDate.map(epochNanoseconds),
+                    summary: entry.summary
+                )
+            }
+            return (ClaudeSessionDiskCache(version: cacheVersion, entries: migrated), true)
         }
-        return cache
+        return (cache, false)
     }
 
-    private func writeCache(_ cache: ClaudeSessionDiskCache, context: RuntimeLoadContext) {
+    private func writeCache(_ cache: ClaudeSessionDiskCache, context: RuntimeLoadContext) -> Bool {
         let url = cacheURL(context: context)
-        try? fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(cache) else { return }
-        try? data.write(to: url, options: .atomic)
+        do {
+            try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            let data = try encoder.encode(cache)
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
     }
 
     private func cacheURL(context: RuntimeLoadContext) -> URL {
@@ -546,7 +581,8 @@ private final class ClaudeCodeTranscriptReader {
         }
         return ClaudeFileFingerprint(
             fileSize: Int64(values.fileSize ?? 0),
-            modificationDate: values.contentModificationDate
+            modificationDate: values.contentModificationDate,
+            modificationTimeNanoseconds: values.contentModificationDate.map(epochNanoseconds)
         )
     }
 }
@@ -774,24 +810,58 @@ private struct ClaudeStatusLineSnapshot {
     }
 }
 
-private struct ClaudeFileFingerprint: Codable {
+private struct ClaudeFileFingerprint {
     let fileSize: Int64
     let modificationDate: Date?
+    let modificationTimeNanoseconds: Int64?
 }
 
 private struct ClaudeSessionCacheEntry: Codable {
     let fileSize: Int64
-    let modificationDate: Date?
+    let modificationTimeNanoseconds: Int64?
     let summary: ClaudeTranscriptSummary
 
     func matches(_ fingerprint: ClaudeFileFingerprint) -> Bool {
-        fileSize == fingerprint.fileSize && modificationDate == fingerprint.modificationDate
+        fileSize == fingerprint.fileSize
+            && modificationTimeNanoseconds == fingerprint.modificationTimeNanoseconds
+    }
+
+    func matchesLegacySecond(_ fingerprint: ClaudeFileFingerprint) -> Bool {
+        guard fileSize == fingerprint.fileSize,
+              let cached = modificationTimeNanoseconds,
+              let current = fingerprint.modificationTimeNanoseconds else {
+            return modificationTimeNanoseconds == fingerprint.modificationTimeNanoseconds
+        }
+        return cached / 1_000_000_000 == current / 1_000_000_000
+    }
+
+    func updatingFingerprint(_ fingerprint: ClaudeFileFingerprint) -> ClaudeSessionCacheEntry {
+        ClaudeSessionCacheEntry(
+            fileSize: fingerprint.fileSize,
+            modificationTimeNanoseconds: fingerprint.modificationTimeNanoseconds,
+            summary: summary
+        )
     }
 }
 
 private struct ClaudeSessionDiskCache: Codable {
     let version: Int
     var entries: [String: ClaudeSessionCacheEntry]
+}
+
+private struct LegacyClaudeSessionCacheEntry: Codable {
+    let fileSize: Int64
+    let modificationDate: Date?
+    let summary: ClaudeTranscriptSummary
+}
+
+private struct LegacyClaudeSessionDiskCache: Codable {
+    let version: Int
+    let entries: [String: LegacyClaudeSessionCacheEntry]
+}
+
+private func epochNanoseconds(_ date: Date) -> Int64 {
+    Int64((date.timeIntervalSince1970 * 1_000_000_000).rounded())
 }
 
 private struct ClaudeTranscriptSummary: Codable {

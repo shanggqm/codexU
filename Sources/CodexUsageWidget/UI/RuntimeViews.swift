@@ -86,6 +86,7 @@ struct RuntimeStatusMenuView: View {
         }
         .padding(14)
         .frame(width: 380, height: runtimeStatusPopoverHeight(for: displayedScopes.count), alignment: .top)
+        .readableForegroundHierarchy(colorScheme)
     }
 
     private var header: some View {
@@ -223,16 +224,13 @@ struct RuntimeSummaryCard: View {
                 }
 
                 HStack(spacing: 10) {
-                    quotaColumn(
-                        title: language.text("5小时剩余", "5h left"),
-                        value: summary.fiveHourRemainingPercent,
-                        resetsAt: summary.fiveHourResetsAt
-                    )
-                    quotaColumn(
-                        title: language.text("7日剩余", "7d left"),
-                        value: summary.sevenDayRemainingPercent,
-                        resetsAt: summary.sevenDayResetsAt
-                    )
+                    if quotaItems.isEmpty {
+                        quotaUnavailableColumn
+                    } else {
+                        ForEach(quotaItems) { item in
+                            quotaColumn(item, width: quotaColumnWidth)
+                        }
+                    }
                     VStack(alignment: .leading, spacing: 3) {
                         Text(language.text("今日 token", "Today"))
                             .font(.system(size: 9, weight: .medium))
@@ -267,12 +265,37 @@ struct RuntimeSummaryCard: View {
         .help(language.text("打开 \(summary.displayName)", "Open \(summary.displayName)"))
     }
 
-    private func quotaColumn(title: String, value: Double?, resetsAt: Date?) -> some View {
+    private var quotaItems: [RuntimeQuotaSummaryItem] {
+        var items: [RuntimeQuotaSummaryItem] = []
+        if let value = summary.fiveHourRemainingPercent {
+            items.append(RuntimeQuotaSummaryItem(
+                id: "five-hour",
+                title: language.text("5小时剩余", "5h left"),
+                value: value,
+                resetsAt: summary.fiveHourResetsAt
+            ))
+        }
+        if let value = summary.sevenDayRemainingPercent {
+            items.append(RuntimeQuotaSummaryItem(
+                id: "seven-day",
+                title: language.text("7日剩余", "7d left"),
+                value: value,
+                resetsAt: summary.sevenDayResetsAt
+            ))
+        }
+        return items
+    }
+
+    private var quotaColumnWidth: CGFloat {
+        quotaItems.count == 1 ? 182 : 86
+    }
+
+    private func quotaColumn(_ item: RuntimeQuotaSummaryItem, width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
+            Text(item.title)
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
-            Text(runtimeFormatPercent(value))
+            Text(runtimeFormatPercent(item.value))
                 .font(.system(size: 15, weight: .bold, design: .rounded))
                 .monospacedDigit()
             GeometryReader { proxy in
@@ -281,15 +304,84 @@ struct RuntimeSummaryCard: View {
                         .fill(WidgetPalette.surfaceTrack)
                     Capsule(style: .continuous)
                         .fill(statusTint.opacity(0.72))
-                        .frame(width: proxy.size.width * CGFloat(max(0, min(100, value ?? 0)) / 100))
+                        .frame(width: proxy.size.width * CGFloat(max(0, min(100, item.value)) / 100))
                 }
             }
             .frame(height: 4)
-            Text(resetsAt.map { runtimeTimeOnly($0) } ?? "--")
+            Text(item.resetsAt.map { runtimeTimeOnly($0) } ?? "--")
                 .font(.system(size: 8, weight: .medium))
                 .foregroundStyle(.tertiary)
         }
-        .frame(width: 86, alignment: .leading)
+        .frame(width: width, alignment: .leading)
+    }
+
+    private var quotaUnavailableColumn: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(language.text("额度", "Quota"))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 5) {
+                Image(systemName: quotaUnavailableSystemName)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(statusTint)
+                Text(quotaUnavailableTitle)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+            Text(quotaUnavailableDetail)
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+        }
+        .frame(width: 182, alignment: .leading)
+    }
+
+    private var quotaUnavailableTitle: String {
+        switch summary.status {
+        case .available:
+            return language.text("当前无额度限制", "No active quota limits")
+        case .localOnly:
+            return language.text("暂无额度数据", "No quota data")
+        case .snapshotNeeded:
+            return language.text("需要额度快照", "Quota snapshot needed")
+        case .stale:
+            return language.text("额度快照已过期", "Quota snapshot is stale")
+        case .unavailable:
+            return language.text("额度暂不可用", "Quota unavailable")
+        }
+    }
+
+    private var quotaUnavailableDetail: String {
+        switch summary.status {
+        case .available:
+            return language.text("服务端未返回活动额度窗口", "No active quota window was returned")
+        case .localOnly:
+            return language.text("当前仅显示本机统计", "Showing local records only")
+        case .snapshotNeeded:
+            return language.text("打开 Runtime 后刷新", "Open the runtime, then refresh")
+        case .stale:
+            return language.text("打开 Runtime 获取最新快照", "Open the runtime for a fresh snapshot")
+        case .unavailable:
+            return language.text("请检查登录状态或数据源", "Check sign-in and the data source")
+        }
+    }
+
+    private var quotaUnavailableSystemName: String {
+        switch summary.status {
+        case .available:
+            return "checkmark.circle"
+        case .snapshotNeeded:
+            return "waveform.path.ecg"
+        case .stale:
+            return "clock.badge.exclamationmark"
+        case .localOnly:
+            return "info.circle"
+        case .unavailable:
+            return "exclamationmark.triangle.fill"
+        }
     }
 
     private var statusTint: Color {
@@ -314,21 +406,42 @@ struct RuntimeSummaryCard: View {
     }
 
     private var localizedSourceLabel: String {
+        let hasQuota = summary.fiveHourRemainingPercent != nil
+            || summary.sevenDayRemainingPercent != nil
         if language.isChinese {
             switch summary.scope {
             case .codex:
-                return summary.fiveHourRemainingPercent == nil ? "本机统计；额度暂不可用" : "官方额度 + 本机统计"
+                if hasQuota { return "官方额度 + 本机统计" }
+                return summary.status == .available
+                    ? "官方额度：当前无限制 · 本机统计"
+                    : "本机统计；额度暂不可用"
             case .claudeCode:
-                return summary.fiveHourRemainingPercent == nil ? "本机统计；额度需 active snapshot" : "active snapshot + 本机统计"
+                if hasQuota {
+                    return summary.status == .stale ? "过期快照 + 本机统计" : "active snapshot + 本机统计"
+                }
+                return "本机统计；额度需 active snapshot"
             }
         }
         switch summary.scope {
         case .codex:
-            return summary.fiveHourRemainingPercent == nil ? "Local records; quota unavailable" : "Official quota + local records"
+            if hasQuota { return "Official quota + local records" }
+            return summary.status == .available
+                ? "Official quota: no active limits · local records"
+                : "Local records; quota unavailable"
         case .claudeCode:
-            return summary.fiveHourRemainingPercent == nil ? "Local records; quota needs active snapshot" : "Active snapshot + local records"
+            if hasQuota {
+                return summary.status == .stale ? "Stale snapshot + local records" : "Active snapshot + local records"
+            }
+            return "Local records; quota needs active snapshot"
         }
     }
+}
+
+private struct RuntimeQuotaSummaryItem: Identifiable {
+    let id: String
+    let title: String
+    let value: Double
+    let resetsAt: Date?
 }
 
 struct RuntimeLogoView: View {

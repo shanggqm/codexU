@@ -37,6 +37,7 @@ private func runtimeJSONObject(_ runtime: RuntimeUsageSnapshot) -> [String: Any]
 private func runtimeJSONObject(_ snapshot: UsageSnapshot) -> [String: Any] {
     var object = runtimeLegacyJSONObject(snapshot)
     object["refreshedAt"] = runtimeISOString(snapshot.refreshedAt) ?? ""
+    object["quotaReadSucceeded"] = snapshot.quotaReadSucceeded
     object["messages"] = snapshot.messages
     return object
 }
@@ -52,11 +53,11 @@ private func runtimeLegacyJSONObject(_ snapshot: UsageSnapshot) -> [String: Any]
         ] as [String: Any]
     }
 
-    if let primary = snapshot.primary {
+    if let primary = snapshot.fiveHourQuota {
         object["primary"] = runtimeJSONObject(primary)
     }
 
-    if let secondary = snapshot.secondary {
+    if let secondary = snapshot.sevenDayQuota {
         object["secondary"] = runtimeJSONObject(secondary)
     }
 

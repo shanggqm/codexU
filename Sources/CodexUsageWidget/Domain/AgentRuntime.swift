@@ -91,10 +91,10 @@ struct RuntimeUsageSnapshot: Identifiable, Equatable {
             scope: scope,
             displayName: displayName,
             status: status,
-            fiveHourRemainingPercent: snapshot.primary?.remainingPercent,
-            fiveHourResetsAt: snapshot.primary?.resetsAt,
-            sevenDayRemainingPercent: snapshot.secondary?.remainingPercent,
-            sevenDayResetsAt: snapshot.secondary?.resetsAt,
+            fiveHourRemainingPercent: snapshot.fiveHourQuota?.remainingPercent,
+            fiveHourResetsAt: snapshot.fiveHourQuota?.resetsAt,
+            sevenDayRemainingPercent: snapshot.sevenDayQuota?.remainingPercent,
+            sevenDayResetsAt: snapshot.sevenDayQuota?.resetsAt,
             todayTokens: todayTokens,
             sourceLabel: quotaSourceLabel
         )
@@ -108,6 +108,39 @@ struct RuntimeUsageSnapshot: Identifiable, Equatable {
             quotaSourceLabel: quotaSourceLabel,
             usageSourceLabel: usageSourceLabel
         )
+    }
+}
+
+enum RuntimeQuotaContinuity {
+    static func reconcile(
+        previous: [RuntimeUsageSnapshot],
+        incoming: [RuntimeUsageSnapshot]
+    ) -> [RuntimeUsageSnapshot] {
+        let previousByScope = Dictionary(uniqueKeysWithValues: previous.map { ($0.scope, $0) })
+
+        return incoming.map { next in
+            guard !next.snapshot.quotaReadSucceeded,
+                  let last = previousByScope[next.scope],
+                  last.status == .available || last.status == .stale,
+                  last.snapshot.fiveHourQuota != nil || last.snapshot.sevenDayQuota != nil
+            else {
+                return next
+            }
+
+            return RuntimeUsageSnapshot(
+                scope: next.scope,
+                snapshot: next.snapshot.replacingQuotaWindows(
+                    fiveHourQuota: last.snapshot.fiveHourQuota,
+                    sevenDayQuota: last.snapshot.sevenDayQuota,
+                    quotaReadSucceeded: false
+                ),
+                status: .stale,
+                quotaSourceLabel: last.quotaSourceLabel.hasSuffix(" · stale")
+                    ? last.quotaSourceLabel
+                    : "\(last.quotaSourceLabel) · stale",
+                usageSourceLabel: next.usageSourceLabel
+            )
+        }
     }
 }
 

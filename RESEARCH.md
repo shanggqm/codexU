@@ -1,6 +1,6 @@
 # Codex usage and remaining limit notes
 
-Date checked: 2026-06-29.
+Date checked: 2026-07-13.
 
 ## Official model
 
@@ -29,7 +29,7 @@ The stable-looking local path is Codex app-server JSON-RPC:
    - `account/rateLimits/read`
    - `account/usage/read`
 
-The generated schema for the installed Codex 0.142.3 runtime includes:
+The generated schema for the installed Codex 0.144.2 runtime includes:
 
 - `GetAccountRateLimitsResponse`
 - `RateLimitSnapshot`
@@ -37,11 +37,19 @@ The generated schema for the installed Codex 0.142.3 runtime includes:
 - `GetAccountTokenUsageResponse`
 - `AccountTokenUsageSummary`
 
-`account/rateLimits/read` returns rolling windows as percentages, not absolute token quota numbers. On this machine it returned:
+`account/rateLimits/read` returns rolling windows as percentages, not absolute token quota numbers. The response uses nullable `primary` and `secondary` transport slots. Those slot names do not define a fixed 5-hour or 7-day meaning; clients must classify each returned window by `windowDurationMins`.
 
-- primary window: 300 minutes
-- secondary window: 10080 minutes
+Observed response combinations on this machine include:
+
+- primary: 300 minutes, secondary: 10080 minutes
+- primary: 10080 minutes, secondary: null
 - each window has `usedPercent` and `resetsAt`
+
+The widget therefore normalizes all returned slots before exposing quota data to the UI:
+
+- 300 minutes: 5-hour quota
+- 10080 minutes: 7-day quota
+- missing, duplicate, or unknown durations: left unclassified and never labeled as 5-hour or 7-day quota
 
 So this widget computes account remaining limit as:
 
