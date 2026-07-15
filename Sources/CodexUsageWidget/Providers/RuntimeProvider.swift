@@ -62,7 +62,33 @@ struct CodexRuntimeProvider: RuntimeUsageProvider {
     let scope: RuntimeScope = .codex
 
     func loadSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot {
-        let snapshot = CodexUsageReader().load(context: context)
+        let cpaConfiguration = CPAConfigurationStore.load()
+        let snapshot: UsageSnapshot
+        let quotaSourceLabel: String
+        if cpaConfiguration.isEnabled {
+            let localSnapshot = CodexUsageReader().loadLocal(context: context)
+            let cpaResult = CPAQuotaReader().load(configuration: cpaConfiguration, now: context.now)
+            let representative = cpaResult.representative
+            snapshot = localSnapshot.replacingAccountQuota(
+                account: AccountInfo(
+                    type: "cli-proxy-api",
+                    planType: representative?.planType,
+                    emailPresent: false
+                ),
+                limitId: representative.map { "cpa:\($0.id)" },
+                limitName: representative.map { "CLIProxyAPI · \($0.displayName)" },
+                quotaReadSucceeded: cpaResult.quotaReadSucceeded,
+                fiveHourQuota: representative?.fiveHourQuota,
+                sevenDayQuota: representative?.sevenDayQuota,
+                monthlyQuota: representative?.monthlyQuota,
+                cpaQuotaAccounts: cpaResult.accounts,
+                additionalMessages: cpaResult.messages
+            )
+            quotaSourceLabel = cpaResult.sourceLabel
+        } else {
+            snapshot = CodexUsageReader().load(context: context)
+            quotaSourceLabel = "Codex app-server + local records"
+        }
         let status: RuntimeMenuStatus
         if snapshot.quotaReadSucceeded {
             status = .available
@@ -76,7 +102,7 @@ struct CodexRuntimeProvider: RuntimeUsageProvider {
             scope: scope,
             snapshot: snapshot,
             status: status,
-            quotaSourceLabel: "Codex app-server + local records",
+            quotaSourceLabel: quotaSourceLabel,
             usageSourceLabel: "Codex local state"
         )
     }

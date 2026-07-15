@@ -190,6 +190,8 @@ struct RuntimeStatusMenuView: View {
             fiveHourResetsAt: nil,
             sevenDayRemainingPercent: nil,
             sevenDayResetsAt: nil,
+            monthlyRemainingPercent: nil,
+            monthlyResetsAt: nil,
             todayTokens: nil,
             sourceLabel: language.text("等待本机统计", "Waiting for local records")
         )
@@ -283,7 +285,15 @@ struct RuntimeSummaryCard: View {
                 resetsAt: summary.sevenDayResetsAt
             ))
         }
-        return items
+        if let value = summary.monthlyRemainingPercent {
+            items.append(RuntimeQuotaSummaryItem(
+                id: "monthly",
+                title: language.text("月额度剩余", "30d left"),
+                value: value,
+                resetsAt: summary.monthlyResetsAt
+            ))
+        }
+        return Array(items.prefix(2))
     }
 
     private var quotaColumnWidth: CGFloat {
@@ -408,6 +418,7 @@ struct RuntimeSummaryCard: View {
     private var localizedSourceLabel: String {
         let hasQuota = summary.fiveHourRemainingPercent != nil
             || summary.sevenDayRemainingPercent != nil
+            || summary.monthlyRemainingPercent != nil
         if language.isChinese {
             switch summary.scope {
             case .codex:

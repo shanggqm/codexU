@@ -21,12 +21,19 @@ enum QuotaDisplayMode: String, CaseIterable, Codable, Identifiable, Equatable {
 enum StatusItemMetric: String, CaseIterable, Codable, Identifiable, Hashable {
     case fiveHourQuota
     case sevenDayQuota
+    case monthlyQuota
     case todayTokens
+
+    static let allCases: [StatusItemMetric] = [
+        .fiveHourQuota,
+        .sevenDayQuota,
+        .todayTokens
+    ]
 
     var id: String { rawValue }
 
     var isQuota: Bool {
-        self == .fiveHourQuota || self == .sevenDayQuota
+        self == .fiveHourQuota || self == .sevenDayQuota || self == .monthlyQuota
     }
 }
 

@@ -261,11 +261,45 @@ struct UsageSnapshot: Equatable {
     let quotaReadSucceeded: Bool
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let credits: CreditsInfo?
     let cloudLifetimeTokens: Int64?
     let local: LocalUsage?
     let taskBoard: TaskBoard?
     let messages: [String]
+    let cpaQuotaAccounts: [CPAQuotaAccount]
+
+    init(
+        refreshedAt: Date,
+        account: AccountInfo?,
+        limitId: String?,
+        limitName: String?,
+        quotaReadSucceeded: Bool,
+        fiveHourQuota: RateWindow?,
+        sevenDayQuota: RateWindow?,
+        monthlyQuota: RateWindow? = nil,
+        credits: CreditsInfo?,
+        cloudLifetimeTokens: Int64?,
+        local: LocalUsage?,
+        taskBoard: TaskBoard?,
+        messages: [String],
+        cpaQuotaAccounts: [CPAQuotaAccount] = []
+    ) {
+        self.refreshedAt = refreshedAt
+        self.account = account
+        self.limitId = limitId
+        self.limitName = limitName
+        self.quotaReadSucceeded = quotaReadSucceeded
+        self.fiveHourQuota = fiveHourQuota
+        self.sevenDayQuota = sevenDayQuota
+        self.monthlyQuota = monthlyQuota
+        self.credits = credits
+        self.cloudLifetimeTokens = cloudLifetimeTokens
+        self.local = local
+        self.taskBoard = taskBoard
+        self.messages = messages
+        self.cpaQuotaAccounts = cpaQuotaAccounts
+    }
 
     static let empty = UsageSnapshot(
         refreshedAt: Date(),
@@ -291,18 +325,22 @@ struct UsageSnapshot: Equatable {
             quotaReadSucceeded: quotaReadSucceeded,
             fiveHourQuota: fiveHourQuota,
             sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
             local: local,
             taskBoard: taskBoard,
-            messages: messages
+            messages: messages,
+            cpaQuotaAccounts: cpaQuotaAccounts
         )
     }
 
     func replacingQuotaWindows(
         fiveHourQuota: RateWindow?,
         sevenDayQuota: RateWindow?,
-        quotaReadSucceeded: Bool
+        monthlyQuota: RateWindow? = nil,
+        quotaReadSucceeded: Bool,
+        cpaQuotaAccounts: [CPAQuotaAccount]? = nil
     ) -> UsageSnapshot {
         UsageSnapshot(
             refreshedAt: refreshedAt,
@@ -312,11 +350,42 @@ struct UsageSnapshot: Equatable {
             quotaReadSucceeded: quotaReadSucceeded,
             fiveHourQuota: fiveHourQuota,
             sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota ?? self.monthlyQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
             local: local,
             taskBoard: taskBoard,
-            messages: messages
+            messages: messages,
+            cpaQuotaAccounts: cpaQuotaAccounts ?? self.cpaQuotaAccounts
+        )
+    }
+
+    func replacingAccountQuota(
+        account: AccountInfo?,
+        limitId: String?,
+        limitName: String?,
+        quotaReadSucceeded: Bool,
+        fiveHourQuota: RateWindow?,
+        sevenDayQuota: RateWindow?,
+        monthlyQuota: RateWindow?,
+        cpaQuotaAccounts: [CPAQuotaAccount],
+        additionalMessages: [String]
+    ) -> UsageSnapshot {
+        UsageSnapshot(
+            refreshedAt: refreshedAt,
+            account: account,
+            limitId: limitId,
+            limitName: limitName,
+            quotaReadSucceeded: quotaReadSucceeded,
+            fiveHourQuota: fiveHourQuota,
+            sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota,
+            credits: nil,
+            cloudLifetimeTokens: nil,
+            local: local,
+            taskBoard: taskBoard,
+            messages: messages + additionalMessages,
+            cpaQuotaAccounts: cpaQuotaAccounts
         )
     }
 }
@@ -956,6 +1025,26 @@ final class CodexUsageReader {
             sevenDayQuota: appServer.sevenDayQuota,
             credits: appServer.credits,
             cloudLifetimeTokens: appServer.cloudLifetimeTokens,
+            local: local,
+            taskBoard: taskBoard,
+            messages: messages
+        )
+    }
+
+    func loadLocal(context: RuntimeLoadContext) -> UsageSnapshot {
+        var messages: [String] = []
+        let local = readLocalUsage(context: context, messages: &messages)
+        let taskBoard = readTaskBoard(context: context, messages: &messages)
+        return UsageSnapshot(
+            refreshedAt: context.now,
+            account: nil,
+            limitId: nil,
+            limitName: nil,
+            quotaReadSucceeded: false,
+            fiveHourQuota: nil,
+            sevenDayQuota: nil,
+            credits: nil,
+            cloudLifetimeTokens: nil,
             local: local,
             taskBoard: taskBoard,
             messages: messages
@@ -3011,6 +3100,31 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    @Published var cpaEnabled: Bool {
+        didSet {
+            defaults.set(cpaEnabled, forKey: CPAConfigurationStore.enabledKey)
+        }
+    }
+
+    @Published var cpaBaseURL: String {
+        didSet {
+            defaults.set(cpaBaseURL, forKey: CPAConfigurationStore.baseURLKey)
+        }
+    }
+
+    @Published var cpaManagementKey: String {
+        didSet {
+            do {
+                try CPAKeychainStore.saveManagementKey(cpaManagementKey)
+                cpaCredentialStorageFailed = false
+            } catch {
+                cpaCredentialStorageFailed = true
+            }
+        }
+    }
+
+    @Published private(set) var cpaCredentialStorageFailed: Bool
+
     @Published private(set) var skippedUpdateVersion: String? {
         didSet {
             if let skippedUpdateVersion {
@@ -3035,6 +3149,7 @@ final class AppSettings: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        let storedCPAConfiguration = CPAConfigurationStore.load(defaults: defaults)
         language = WidgetLanguage.storedOrAutomatic(defaults: defaults)
         themeMode = WidgetThemeMode.storedOrAutomatic(defaults: defaults)
         particleAnimationMode = ParticleAnimationMode.storedOrDefault(defaults: defaults)
@@ -3050,6 +3165,10 @@ final class AppSettings: ObservableObject {
             automaticUpdateChecksEnabled = defaults.bool(forKey: Self.automaticUpdateChecksEnabledKey)
         }
         skippedUpdateVersion = defaults.string(forKey: Self.skippedUpdateVersionKey)
+        cpaEnabled = storedCPAConfiguration.isEnabled
+        cpaBaseURL = storedCPAConfiguration.baseURL
+        cpaManagementKey = storedCPAConfiguration.managementKey
+        cpaCredentialStorageFailed = false
         visibleRuntimeScopes = Self.storedVisibleRuntimeScopes(defaults: defaults)
         statusItemPreferences = StatusItemPreferencesStore.load(defaults: defaults)
         let storedShortcut = GlobalShortcut.load(defaults: defaults)
@@ -3060,6 +3179,14 @@ final class AppSettings: ObservableObject {
             globalShortcut = storedShortcut
         }
         globalShortcutError = nil
+    }
+
+    var cpaConfiguration: CPAConfiguration {
+        CPAConfiguration(
+            isEnabled: cpaEnabled,
+            baseURL: cpaBaseURL,
+            managementKey: cpaManagementKey
+        )
     }
 
     func isRuntimeVisible(_ scope: RuntimeScope) -> Bool {
@@ -3335,55 +3462,77 @@ struct UsageWidgetView: View {
     }
 
     private var usageOverviewSection: some View {
-        HStack(alignment: .center, spacing: 26) {
-            VStack(spacing: 8) {
-                DualQuotaRing(
-                    fiveHourQuota: snapshot.fiveHourQuota,
-                    sevenDayQuota: snapshot.sevenDayQuota,
-                    quotaReadSucceeded: snapshot.quotaReadSucceeded,
-                    quotaIsStale: selectedQuotaIsStale,
-                    language: language,
-                    visualEnergyMode: store.visualEnergyMode,
-                    animationMode: settings.particleAnimationMode
-                )
-                .frame(width: 145, height: 145)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 26) {
+                VStack(spacing: 8) {
+                    DualQuotaRing(
+                        fiveHourQuota: snapshot.fiveHourQuota,
+                        sevenDayQuota: snapshot.sevenDayQuota,
+                        monthlyQuota: snapshot.monthlyQuota,
+                        quotaReadSucceeded: snapshot.quotaReadSucceeded,
+                        quotaIsStale: selectedQuotaIsStale,
+                        language: language,
+                        visualEnergyMode: store.visualEnergyMode,
+                        animationMode: settings.particleAnimationMode
+                    )
+                    .frame(width: 145, height: 145)
 
-                QuotaResetSummary(
-                    fiveHourQuota: snapshot.fiveHourQuota,
-                    sevenDayQuota: snapshot.sevenDayQuota,
-                    language: language
-                )
-                .frame(width: 154, height: 26)
-            }
+                    QuotaResetSummary(
+                        fiveHourQuota: snapshot.fiveHourQuota,
+                        sevenDayQuota: snapshot.sevenDayQuota,
+                        monthlyQuota: snapshot.monthlyQuota,
+                        language: language
+                    )
+                    .frame(width: 154, height: 26)
 
-            VStack(alignment: .leading, spacing: 13) {
-                HStack(spacing: 12) {
-                    DetailedTokenMetricCard(
-                        title: language.text("今日", "Today"),
-                        systemName: "sun.max.fill",
-                        usage: snapshot.local?.detailedUsage?.today,
-                        fallbackTokens: snapshot.local?.todayTokens,
-                        language: language
-                    )
-                    DetailedTokenMetricCard(
-                        title: language.text("近 7 天", "Last 7 days"),
-                        systemName: "calendar",
-                        usage: snapshot.local?.detailedUsage?.sevenDay,
-                        fallbackTokens: snapshot.local?.sevenDayTokens,
-                        language: language
-                    )
-                    DetailedTokenMetricCard(
-                        title: language.text("累计", "Lifetime"),
-                        systemName: "sum",
-                        usage: snapshot.local?.detailedUsage?.lifetime,
-                        fallbackTokens: snapshot.local?.lifetimeTokens,
-                        language: language
-                    )
+                    if !snapshot.cpaQuotaAccounts.isEmpty {
+                        Text(snapshot.limitName ?? "CLIProxyAPI")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .frame(width: 154)
+                            .help(language.text("主环显示当前最低额度账号", "Main rings show the lowest account"))
+                    }
                 }
 
-                WoolProgressCard(usage: snapshot.local?.detailedUsage?.month, language: language)
+                VStack(alignment: .leading, spacing: 13) {
+                    HStack(spacing: 12) {
+                        DetailedTokenMetricCard(
+                            title: language.text("今日", "Today"),
+                            systemName: "sun.max.fill",
+                            usage: snapshot.local?.detailedUsage?.today,
+                            fallbackTokens: snapshot.local?.todayTokens,
+                            language: language
+                        )
+                        DetailedTokenMetricCard(
+                            title: language.text("近 7 天", "Last 7 days"),
+                            systemName: "calendar",
+                            usage: snapshot.local?.detailedUsage?.sevenDay,
+                            fallbackTokens: snapshot.local?.sevenDayTokens,
+                            language: language
+                        )
+                        DetailedTokenMetricCard(
+                            title: language.text("累计", "Lifetime"),
+                            systemName: "sum",
+                            usage: snapshot.local?.detailedUsage?.lifetime,
+                            fallbackTokens: snapshot.local?.lifetimeTokens,
+                            language: language
+                        )
+                    }
+
+                    WoolProgressCard(usage: snapshot.local?.detailedUsage?.month, language: language)
+                }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
+
+            if !snapshot.cpaQuotaAccounts.isEmpty {
+                Divider()
+                CPAQuotaAccountsView(
+                    accounts: snapshot.cpaQuotaAccounts,
+                    isStale: selectedQuotaIsStale,
+                    language: language
+                )
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 16)
@@ -3497,7 +3646,9 @@ struct UsageWidgetView: View {
 
     private var shouldShowEnvironmentChecklist: Bool {
         if snapshot.messages.contains("正在读取 codexU 数据") { return false }
-        let quotaUnavailable = snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil
+        let quotaUnavailable = snapshot.fiveHourQuota == nil
+            && snapshot.sevenDayQuota == nil
+            && snapshot.monthlyQuota == nil
         let hasQuotaProtocolWarning = snapshot.messages.contains { $0.contains("额度窗口") }
         return (!snapshot.messages.isEmpty && (quotaUnavailable || hasQuotaProtocolWarning || snapshot.local == nil))
             || snapshot.account == nil
@@ -3549,7 +3700,37 @@ struct UsageWidgetView: View {
             return items
         }
 
-        if (snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil) || snapshot.account == nil {
+        if snapshot.account?.type == "cli-proxy-api",
+           snapshot.fiveHourQuota == nil
+            && snapshot.sevenDayQuota == nil
+            && snapshot.monthlyQuota == nil {
+            let cpaMessage = snapshot.messages.first { $0.contains("CPA") }
+                ?? "CPA 账号额度暂不可用"
+            items.append(DiagnosticItem(
+                id: "cpa-quota-unavailable",
+                title: language.text("CPA 额度暂不可用", "CPA quota unavailable"),
+                detail: localizedReaderMessage(cpaMessage, language: language),
+                systemName: "network.badge.shield.half.filled",
+                tint: WidgetPalette.statusWarning
+            ))
+            if snapshot.local == nil {
+                items.append(DiagnosticItem(
+                    id: "cpa-local-usage",
+                    title: language.text("暂无 Codex 本机用量记录", "No local Codex usage records yet"),
+                    detail: language.text(
+                        "CPA 只提供远程账号额度；token、趋势和任务仍来自本机 Codex 记录。",
+                        "CPA provides remote account quota only. Tokens, trends, and tasks still come from local Codex records."
+                    ),
+                    systemName: "externaldrive.badge.questionmark",
+                    tint: WidgetPalette.statusInfo
+                ))
+            }
+            return items
+        }
+
+        if (snapshot.fiveHourQuota == nil
+            && snapshot.sevenDayQuota == nil
+            && snapshot.monthlyQuota == nil) || snapshot.account == nil {
             if messages.contains("未找到 codex") {
                 items.append(DiagnosticItem(
                     id: "codex-missing",
@@ -3892,6 +4073,87 @@ struct SettingsPanelView: View {
                 }
 
                 settingsSection(
+                    title: "CLI Proxy API",
+                    detail: language.text("远程 Codex 额度", "Remote Codex quota")
+                ) {
+                    SettingsToggleRow(
+                        title: language.text("启用 CPA 额度", "Enable CPA quota"),
+                        detail: language.text(
+                            "启用后使用 CPA 账号池额度替代本机 Codex 账户额度",
+                            "Uses the CPA account pool instead of the local Codex account quota"
+                        )
+                    ) {
+                        SettingsSwitchToggle(isOn: $settings.cpaEnabled)
+                    }
+
+                    if settings.cpaEnabled {
+                        SettingsBaseRow(
+                            title: language.text("CPA 地址", "CPA URL"),
+                            detail: language.text(
+                                "远程地址必须使用 HTTPS；本机可使用 http://127.0.0.1",
+                                "Remote URLs require HTTPS; localhost may use http://127.0.0.1"
+                            )
+                        ) {
+                            SettingsTextInput(
+                                text: $settings.cpaBaseURL,
+                                placeholder: CPAConfiguration.defaultBaseURL
+                            )
+                        }
+
+                        SettingsBaseRow(
+                            title: language.text("管理 Key", "Management key"),
+                            detail: language.text(
+                                "仅保存到 macOS 钥匙串，不写入偏好或日志",
+                                "Stored only in macOS Keychain, never preferences or logs"
+                            )
+                        ) {
+                            SettingsTextInput(
+                                text: $settings.cpaManagementKey,
+                                placeholder: language.text("输入管理 Key", "Enter management key"),
+                                isSecure: true
+                            )
+                        }
+
+                        SettingsValueRow(
+                            title: language.text("连接状态", "Connection status"),
+                            detail: language.text("配置变更后自动刷新", "Refreshes after configuration changes"),
+                            value: cpaConnectionStatus
+                        )
+
+                        SettingsBaseRow(
+                            title: language.text("立即检查", "Check now"),
+                            detail: language.text(
+                                "读取账号列表和各账号 5h / 7d / 月额度",
+                                "Reads the account list and each account's 5h / 7d / monthly quota"
+                            )
+                        ) {
+                            Button(language.text("刷新额度", "Refresh quota")) {
+                                store.refresh(queueIfBusy: true)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(cpaConfigurationError != nil)
+                        }
+
+                        if settings.cpaCredentialStorageFailed {
+                            SettingsErrorRow(
+                                title: language.text("管理 Key 未保存", "Management key not saved"),
+                                message: language.text(
+                                    "macOS 钥匙串暂不可用，请重新输入后再试。",
+                                    "macOS Keychain is unavailable. Re-enter the key and try again."
+                                ),
+                                currentValue: language.text("CPA 额度不会发起请求", "CPA quota requests are paused")
+                            )
+                        } else if let cpaConfigurationError {
+                            SettingsErrorRow(
+                                title: language.text("CPA 配置不完整", "CPA configuration incomplete"),
+                                message: cpaConfigurationErrorMessage(cpaConfigurationError),
+                                currentValue: language.text("修正后会自动刷新", "Refreshes automatically after correction")
+                            )
+                        }
+                    }
+                }
+
+                settingsSection(
                     title: language.text("数据与统计", "Data & Statistics"),
                     detail: language.text("自然日口径", "Calendar-day basis")
                 ) {
@@ -4057,6 +4319,46 @@ struct SettingsPanelView: View {
             return language.text("UTC 日界线，便于对照官方", "UTC day boundary for easier official comparison")
         case .fixed:
             return identity.resolvedIdentifier
+        }
+    }
+
+    private var cpaConfigurationError: CPAConfigurationError? {
+        guard settings.cpaEnabled else { return nil }
+        do {
+            try settings.cpaConfiguration.validate()
+            return nil
+        } catch let error as CPAConfigurationError {
+            return error
+        } catch {
+            return .invalidBaseURL
+        }
+    }
+
+    private var cpaConnectionStatus: String {
+        if let error = cpaConfigurationError {
+            return cpaConfigurationErrorMessage(error)
+        }
+        guard store.snapshot.account?.type == "cli-proxy-api" else {
+            return language.text("等待刷新", "Waiting for refresh")
+        }
+        let accounts = store.snapshot.cpaQuotaAccounts
+        let available = accounts.filter { $0.status == .available }.count
+        if store.snapshot.quotaReadSucceeded {
+            return language.text("已连接 · \(available)/\(accounts.count) 账号", "Connected · \(available)/\(accounts.count) accounts")
+        }
+        return language.text("暂不可用", "Unavailable")
+    }
+
+    private func cpaConfigurationErrorMessage(_ error: CPAConfigurationError) -> String {
+        switch error {
+        case .missingBaseURL:
+            return language.text("请填写 CPA 地址", "Enter the CPA URL")
+        case .missingManagementKey:
+            return language.text("请填写管理 Key", "Enter the management key")
+        case .invalidBaseURL:
+            return language.text("CPA 地址格式无效", "The CPA URL is invalid")
+        case .insecureRemoteURL:
+            return language.text("远程 CPA 必须使用 HTTPS", "Remote CPA must use HTTPS")
         }
     }
 
@@ -4260,6 +4562,25 @@ struct SettingsSwitchToggle: View {
             .frame(width: settingsSwitchWidth, alignment: .trailing)
             .disabled(isDisabled)
             .help(help ?? "")
+    }
+}
+
+struct SettingsTextInput: View {
+    @Binding var text: String
+    let placeholder: String
+    var isSecure = false
+
+    var body: some View {
+        Group {
+            if isSecure {
+                SecureField(placeholder, text: $text)
+            } else {
+                TextField(placeholder, text: $text)
+            }
+        }
+        .textFieldStyle(.roundedBorder)
+        .font(.system(size: 11, weight: .medium))
+        .frame(width: settingsAccessoryColumnWidth)
     }
 }
 
@@ -4554,32 +4875,37 @@ private enum QuotaRingGeometry {
 private enum QuotaWindowKind: String, Hashable {
     case fiveHour
     case sevenDay
+    case monthly
 
     var compactTitle: String {
         switch self {
-        case .fiveHour: return "5h"
-        case .sevenDay: return "7d"
+        case .fiveHour: "5h"
+        case .sevenDay: "7d"
+        case .monthly: "30d"
         }
     }
 
     var startColor: RingRGBColor {
         switch self {
-        case .fiveHour: return quotaPrimaryStartColor
-        case .sevenDay: return quotaSecondaryStartColor
+        case .fiveHour: quotaPrimaryStartColor
+        case .sevenDay: quotaSecondaryStartColor
+        case .monthly: WidgetPalette.brandSecondaryRGB
         }
     }
 
     var endColor: RingRGBColor {
         switch self {
-        case .fiveHour: return quotaPrimaryEndColor
-        case .sevenDay: return quotaSecondaryEndColor
+        case .fiveHour: quotaPrimaryEndColor
+        case .sevenDay: quotaSecondaryEndColor
+        case .monthly: WidgetPalette.brandSecondaryStrongRGB
         }
     }
 
     var color: Color {
         switch self {
-        case .fiveHour: return quotaPrimaryColor
-        case .sevenDay: return quotaSecondaryColor
+        case .fiveHour: quotaPrimaryColor
+        case .sevenDay: quotaSecondaryColor
+        case .monthly: WidgetPalette.brandSecondaryStrong
         }
     }
 }
@@ -4616,7 +4942,11 @@ private struct QuotaRingPresentation: Equatable {
 
     let items: [QuotaRingItem]
 
-    init(fiveHourQuota: RateWindow?, sevenDayQuota: RateWindow?) {
+    init(
+        fiveHourQuota: RateWindow?,
+        sevenDayQuota: RateWindow?,
+        monthlyQuota: RateWindow? = nil
+    ) {
         var items: [QuotaRingItem] = []
         if let fiveHourQuota {
             items.append(QuotaRingItem(kind: .fiveHour, window: fiveHourQuota))
@@ -4624,7 +4954,10 @@ private struct QuotaRingPresentation: Equatable {
         if let sevenDayQuota {
             items.append(QuotaRingItem(kind: .sevenDay, window: sevenDayQuota))
         }
-        self.items = items
+        if let monthlyQuota {
+            items.append(QuotaRingItem(kind: .monthly, window: monthlyQuota))
+        }
+        self.items = Array(items.prefix(2))
     }
 
     var topology: Topology {
@@ -4671,7 +5004,9 @@ private struct QuotaRingPresentation: Equatable {
     }
 
     func diameter(for item: QuotaRingItem) -> CGFloat {
-        guard topology == .dual, item.kind == .sevenDay else {
+        guard topology == .dual,
+              items.firstIndex(of: item) == 1
+        else {
             return QuotaRingGeometry.outerDiameter
         }
         return QuotaRingGeometry.innerDiameter
@@ -4700,6 +5035,7 @@ private enum QuotaRingHoverTarget {
 struct DualQuotaRing: View {
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let quotaReadSucceeded: Bool
     let quotaIsStale: Bool
     let language: WidgetLanguage
@@ -4711,7 +5047,8 @@ struct DualQuotaRing: View {
     private var presentation: QuotaRingPresentation {
         QuotaRingPresentation(
             fiveHourQuota: fiveHourQuota,
-            sevenDayQuota: sevenDayQuota
+            sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota
         )
     }
 
@@ -5572,6 +5909,7 @@ private enum QuotaParticleAnimationSelfTest {
 
         let fullFiveHour = quotaWindow(usedPercent: 0, durationMins: 300)
         let fullSevenDay = quotaWindow(usedPercent: 0, durationMins: 10_080)
+        let fullMonthly = quotaWindow(usedPercent: 0, durationMins: 43_200)
         let noQuotaPresentation = QuotaRingPresentation(
             fiveHourQuota: nil,
             sevenDayQuota: nil
@@ -5587,6 +5925,21 @@ private enum QuotaParticleAnimationSelfTest {
         let dualPresentation = QuotaRingPresentation(
             fiveHourQuota: fullFiveHour,
             sevenDayQuota: fullSevenDay
+        )
+        let monthlyOnlyPresentation = QuotaRingPresentation(
+            fiveHourQuota: nil,
+            sevenDayQuota: nil,
+            monthlyQuota: fullMonthly
+        )
+        let weeklyMonthlyPresentation = QuotaRingPresentation(
+            fiveHourQuota: nil,
+            sevenDayQuota: fullSevenDay,
+            monthlyQuota: fullMonthly
+        )
+        let threeWindowPresentation = QuotaRingPresentation(
+            fiveHourQuota: fullFiveHour,
+            sevenDayQuota: fullSevenDay,
+            monthlyQuota: fullMonthly
         )
 
         expect(noQuotaPresentation.topology == .none, "zero quota windows should use the empty presentation")
@@ -5612,6 +5965,19 @@ private enum QuotaParticleAnimationSelfTest {
         expect(
             dualPresentation.items.map(\.kind) == [.fiveHour, .sevenDay],
             "dual presentation should retain the stable 5h then 7d order"
+        )
+        expect(
+            monthlyOnlyPresentation.items.map(\.kind) == [.monthly]
+                && monthlyOnlyPresentation.topology == .single,
+            "monthly-only quota should use one correctly labeled ring"
+        )
+        expect(
+            weeklyMonthlyPresentation.items.map(\.kind) == [.sevenDay, .monthly],
+            "7d and monthly quotas should share the dual-ring presentation"
+        )
+        expect(
+            threeWindowPresentation.items.map(\.kind) == [.fiveHour, .sevenDay],
+            "the main ring should keep stable 5h/7d priority when all three windows exist"
         )
         expect(
             dualPresentation.activeRadii == [
@@ -5987,12 +6353,14 @@ private struct QuotaUnavailablePlaceholder: View {
 struct QuotaResetSummary: View {
     let fiveHourQuota: RateWindow?
     let sevenDayQuota: RateWindow?
+    let monthlyQuota: RateWindow?
     let language: WidgetLanguage
 
     private var presentation: QuotaRingPresentation {
         QuotaRingPresentation(
             fiveHourQuota: fiveHourQuota,
-            sevenDayQuota: sevenDayQuota
+            sevenDayQuota: sevenDayQuota,
+            monthlyQuota: monthlyQuota
         )
     }
 
@@ -8497,6 +8865,19 @@ private func localizedReaderMessage(_ message: String, language: WidgetLanguage)
     if message.contains("未找到 Codex session 日志") { return "Codex session logs not found" }
     if message.contains("未找到 Codex token_count 事件") { return "Codex token_count events not found" }
     if message.contains("任务看板未找到 SQLite 数据源") { return "Task board SQLite data source not found" }
+    if message.contains("CPA 地址未填写") { return "Enter the CPA URL in Settings" }
+    if message.contains("CPA 管理 Key 未填写") { return "Enter the CPA management key in Settings" }
+    if message.contains("CPA 地址格式无效") { return "The CPA URL is invalid" }
+    if message.contains("远程 CPA 必须使用 HTTPS") { return "Remote CPA must use HTTPS" }
+    if message.contains("CPA 管理 Key 无效") { return "The CPA management key was rejected or remote management is disabled" }
+    if message.contains("CPA 额度请求超时") { return "The CPA quota request timed out" }
+    if message.contains("CPA 额度连接失败") { return "Could not connect to CPA" }
+    if message.contains("CPA 未返回可用的 Codex 账号") { return "CPA returned no enabled Codex accounts" }
+    if message.contains("CPA Codex 账号额度均不可用") { return "All CPA Codex account quotas are unavailable" }
+    if message.contains("CPA 有") && message.contains("账号额度暂不可用") {
+        return "Some CPA Codex account quotas are unavailable"
+    }
+    if message.contains("CPA") && message.contains("HTTP") { return message }
     if message.contains("额度响应缺少窗口字段") {
         return "Codex quota response is missing window fields, so it was not treated as having no active limits"
     }
@@ -8639,6 +9020,15 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
         ] as [String: Any]
     }
 
+    if let monthly = snapshot.monthlyQuota {
+        object["monthlyQuota"] = [
+            "usedPercent": monthly.usedPercent,
+            "remainingPercent": monthly.remainingPercent,
+            "windowDurationMins": jsonValue(monthly.windowDurationMins),
+            "resetsAt": jsonValue(isoString(monthly.resetsAt))
+        ] as [String: Any]
+    }
+
     if let credits = snapshot.credits {
         object["credits"] = [
             "hasCredits": credits.hasCredits,
@@ -8646,6 +9036,39 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
             "balance": jsonValue(credits.balance),
             "resetCredits": jsonValue(credits.resetCredits)
         ] as [String: Any]
+    }
+
+    if !snapshot.cpaQuotaAccounts.isEmpty {
+        object["cpaAccounts"] = snapshot.cpaQuotaAccounts.map { account in
+            var accountObject: [String: Any] = [
+                "displayName": account.displayName,
+                "planType": jsonValue(account.planType),
+                "status": account.status.rawValue,
+                "message": jsonValue(account.message)
+            ]
+            if let quota = account.fiveHourQuota {
+                accountObject["fiveHour"] = [
+                    "usedPercent": quota.usedPercent,
+                    "remainingPercent": quota.remainingPercent,
+                    "resetsAt": jsonValue(isoString(quota.resetsAt))
+                ] as [String: Any]
+            }
+            if let quota = account.sevenDayQuota {
+                accountObject["sevenDay"] = [
+                    "usedPercent": quota.usedPercent,
+                    "remainingPercent": quota.remainingPercent,
+                    "resetsAt": jsonValue(isoString(quota.resetsAt))
+                ] as [String: Any]
+            }
+            if let quota = account.monthlyQuota {
+                accountObject["monthly"] = [
+                    "usedPercent": quota.usedPercent,
+                    "remainingPercent": quota.remainingPercent,
+                    "resetsAt": jsonValue(isoString(quota.resetsAt))
+                ] as [String: Any]
+            }
+            return accountObject
+        }
     }
 
     if let local = snapshot.local {
@@ -9223,6 +9646,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             }
             .store(in: &cancellables)
 
+        Publishers.CombineLatest3(
+            settings.$cpaEnabled,
+            settings.$cpaBaseURL,
+            settings.$cpaManagementKey
+        )
+        .dropFirst()
+        .debounce(for: .milliseconds(700), scheduler: RunLoop.main)
+        .sink { [weak self] _, _, _ in
+            self?.store.refresh(queueIfBusy: true)
+        }
+        .store(in: &cancellables)
+
     }
 
     @objc private func statusItemClicked() {
@@ -9598,6 +10033,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-rate-limits") {
             exit(CodexRateLimitNormalizerSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-cpa-quota") {
+            exit(CPAQuotaSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--self-test-updates") {

@@ -3,6 +3,7 @@ import Cocoa
 enum StatusItemQuotaPaletteRole: Equatable {
     case primary
     case secondary
+    case monthly
 }
 
 struct StatusItemSourceSnapshot: Equatable {
@@ -12,6 +13,8 @@ struct StatusItemSourceSnapshot: Equatable {
     let fiveHourResetsAt: Date?
     let sevenDayRemainingPercent: Double?
     let sevenDayResetsAt: Date?
+    let monthlyRemainingPercent: Double?
+    let monthlyResetsAt: Date?
     let todayTokens: Int64?
 
     init(summary: RuntimeMenuSummary) {
@@ -21,6 +24,8 @@ struct StatusItemSourceSnapshot: Equatable {
         fiveHourResetsAt = summary.fiveHourResetsAt
         sevenDayRemainingPercent = summary.sevenDayRemainingPercent
         sevenDayResetsAt = summary.sevenDayResetsAt
+        monthlyRemainingPercent = summary.monthlyRemainingPercent
+        monthlyResetsAt = summary.monthlyResetsAt
         todayTokens = summary.todayTokens
     }
 
@@ -32,6 +37,8 @@ struct StatusItemSourceSnapshot: Equatable {
             fiveHourResetsAt: nil,
             sevenDayRemainingPercent: nil,
             sevenDayResetsAt: nil,
+            monthlyRemainingPercent: nil,
+            monthlyResetsAt: nil,
             todayTokens: nil
         )
     }
@@ -43,6 +50,8 @@ struct StatusItemSourceSnapshot: Equatable {
         fiveHourResetsAt: Date?,
         sevenDayRemainingPercent: Double?,
         sevenDayResetsAt: Date?,
+        monthlyRemainingPercent: Double? = nil,
+        monthlyResetsAt: Date? = nil,
         todayTokens: Int64?
     ) {
         self.runtime = runtime
@@ -51,6 +60,8 @@ struct StatusItemSourceSnapshot: Equatable {
         self.fiveHourResetsAt = fiveHourResetsAt
         self.sevenDayRemainingPercent = sevenDayRemainingPercent
         self.sevenDayResetsAt = sevenDayResetsAt
+        self.monthlyRemainingPercent = monthlyRemainingPercent
+        self.monthlyResetsAt = monthlyResetsAt
         self.todayTokens = todayTokens
     }
 }
@@ -183,7 +194,7 @@ struct StatusItemPresentationBuilder {
                 now: now
             )
         }
-        let availableQuotaMetrics = [StatusItemMetric.fiveHourQuota, .sevenDayQuota]
+        let availableQuotaMetrics = [StatusItemMetric.fiveHourQuota, .sevenDayQuota, .monthlyQuota]
             .map { metric in
                 makeMetric(
                     metric,
@@ -296,6 +307,16 @@ struct StatusItemPresentationBuilder {
                 preferences: preferences,
                 now: now
             )
+        case .monthlyQuota:
+            return makeQuotaMetric(
+                metric: metric,
+                label: "30d",
+                remainingPercent: source.monthlyRemainingPercent,
+                resetsAt: source.monthlyResetsAt,
+                paletteRole: .monthly,
+                preferences: preferences,
+                now: now
+            )
         case .todayTokens:
             let value = TokenFormatter.format(source.todayTokens)
             return StatusItemMetricPresentation(
@@ -366,7 +387,7 @@ struct StatusItemPresentationBuilder {
         }
         values += metrics.map { metric -> String in
             switch metric.metric {
-            case .fiveHourQuota, .sevenDayQuota:
+            case .fiveHourQuota, .sevenDayQuota, .monthlyQuota:
                 let value = metric.isAvailable ? metric.value : unavailable
                 let quotaName: String
                 switch metric.metric {
@@ -374,6 +395,8 @@ struct StatusItemPresentationBuilder {
                     quotaName = language.text("5 小时额度", "5-hour quota")
                 case .sevenDayQuota:
                     quotaName = language.text("7 天额度", "7-day quota")
+                case .monthlyQuota:
+                    quotaName = language.text("月额度", "monthly quota")
                 case .todayTokens:
                     quotaName = metric.label
                 }

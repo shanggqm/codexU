@@ -32,7 +32,7 @@ else
 CODESIGN_FLAGS := --force --deep --options runtime --timestamp --sign "$(SIGN_IDENTITY)" $(CODESIGN_EXTRA_FLAGS)
 endif
 
-.PHONY: build run probe test-rate-limits test-statistics-time-zone test-token-counter test-particle-animation test-macos-compatibility install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
+.PHONY: build run probe test-rate-limits test-cpa-quota test-statistics-time-zone test-particle-animation install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
 
 build:
 	rm -rf "$(APP_DIR)"
@@ -45,6 +45,7 @@ build:
 		-o "$(MACOS_DIR)/$(APP_NAME)" \
 		-framework Cocoa \
 		-framework Carbon \
+		-framework Security \
 		-framework SwiftUI
 	codesign $(CODESIGN_FLAGS) "$(APP_DIR)"
 	codesign --verify --deep --strict "$(APP_DIR)"
@@ -57,6 +58,9 @@ probe: build
 
 test-rate-limits:
 	./scripts/test-rate-limits.sh
+
+test-cpa-quota:
+	./scripts/test-cpa-quota.sh
 
 test-statistics-time-zone:
 	./scripts/test-statistics-time-zone.sh
