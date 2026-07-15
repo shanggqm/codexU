@@ -1714,7 +1714,8 @@ final class CodexUsageReader {
             return cached.analytics
         }
 
-        if let cached = readPersistentLocalAnalyticsCache(),
+        let persistentAnalyticsCache = readPersistentLocalAnalyticsCache()
+        if let cached = persistentAnalyticsCache,
            cached.version == localAnalyticsCacheVersion,
            cached.dayKey == dayKey,
            cached.timeZoneIdentifier == statistics.resolvedIdentifier,
@@ -1722,6 +1723,20 @@ final class CodexUsageReader {
             Self.localAnalyticsCache = cached
             writePersistentSessionUsageCache()
             return cached.analytics
+        }
+
+        var reusableSkillStaticInfo: [String: SkillStaticInfo] = [:]
+        for skill in persistentAnalyticsCache?.analytics.skillUsages ?? [] {
+            reusableSkillStaticInfo[skill.path] = SkillStaticInfo(
+                tokenEstimate: skill.staticTokenEstimate,
+                byteCount: skill.staticByteCount
+            )
+        }
+        for skill in Self.localAnalyticsCache?.analytics.skillUsages ?? [] {
+            reusableSkillStaticInfo[skill.path] = SkillStaticInfo(
+                tokenEstimate: skill.staticTokenEstimate,
+                byteCount: skill.staticByteCount
+            )
         }
 
         var monthComponents = calendar.dateComponents([.year, .month], from: dayStart)
@@ -1812,7 +1827,10 @@ final class CodexUsageReader {
         }
 
         writePersistentSessionUsageCache()
-        let skillUsages = makeSkillUsages(from: skillUsage)
+        let skillUsages = makeSkillUsages(
+            from: skillUsage,
+            reusableStaticInfo: reusableSkillStaticInfo
+        )
 
         guard accumulator.parsedFileCount > 0, accumulator.tokenEventCount > 0 else {
             messages.append("未找到 Codex token_count 事件")
@@ -2126,10 +2144,15 @@ final class CodexUsageReader {
         }
     }
 
-    private func makeSkillUsages(from accumulators: [String: SkillUsageAccumulator]) -> [SkillUsage] {
+    private func makeSkillUsages(
+        from accumulators: [String: SkillUsageAccumulator],
+        reusableStaticInfo: [String: SkillStaticInfo]
+    ) -> [SkillUsage] {
         accumulators.values
             .map { accumulator in
-                accumulator.makeUsage(staticInfo: skillStaticInfo(for: accumulator.path))
+                accumulator.makeUsage(
+                    staticInfo: reusableStaticInfo[accumulator.path] ?? skillStaticInfo(for: accumulator.path)
+                )
             }
             .sorted {
                 if $0.loadCount != $1.loadCount { return $0.loadCount > $1.loadCount }
