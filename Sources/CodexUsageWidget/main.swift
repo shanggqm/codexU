@@ -243,6 +243,10 @@ struct TaskItem: Identifiable, Equatable {
     let updatedAt: Date?
     let tokens: Int64?
     let kind: TaskColumnKind
+    let source: RuntimeScope
+    let summary: String?
+    let recentReply: String?
+    let navigationTarget: TaskNavigationTarget?
 }
 
 struct TaskColumn: Identifiable, Equatable {
@@ -304,6 +308,23 @@ struct UsageSnapshot: Equatable {
             local: local,
             taskBoard: taskBoard,
             messages: messages
+        )
+    }
+
+    func replacingLocalUsage(_ local: LocalUsage?, messages additionalMessages: [String] = []) -> UsageSnapshot {
+        UsageSnapshot(
+            refreshedAt: refreshedAt,
+            account: account,
+            limitId: limitId,
+            limitName: limitName,
+            quotaReadSucceeded: quotaReadSucceeded,
+            fiveHourQuota: fiveHourQuota,
+            sevenDayQuota: sevenDayQuota,
+            credits: credits,
+            cloudLifetimeTokens: cloudLifetimeTokens,
+            local: local,
+            taskBoard: taskBoard,
+            messages: messages + additionalMessages
         )
     }
 
@@ -873,16 +894,18 @@ final class UsageStore: ObservableObject {
     private func refreshTaskBoard() {
         guard !isRefreshing, !isRefreshingTaskBoard else { return }
         isRefreshingTaskBoard = true
-        let scope = selectedRuntimeScope
+        let scopes = visibleRuntimeScopes
         let preference = statisticsPreference
 
         DispatchQueue.global(qos: .utility).async {
-            let taskBoard = MultiRuntimeUsageReader().loadTaskBoard(
-                scope: scope,
-                statisticsPreference: preference
-            )
+            let reader = MultiRuntimeUsageReader()
+            let taskBoards = scopes.map { scope in
+                (scope, reader.loadTaskBoard(scope: scope, statisticsPreference: preference))
+            }
             DispatchQueue.main.async {
-                self.applyTaskBoard(taskBoard, for: scope)
+                for (scope, taskBoard) in taskBoards {
+                    self.applyTaskBoard(taskBoard, for: scope)
+                }
                 self.isRefreshingTaskBoard = false
                 if self.hasPendingRefresh {
                     self.hasPendingRefresh = false
@@ -937,7 +960,7 @@ final class UsageStore: ObservableObject {
 
 final class CodexUsageReader {
     private let fileManager = FileManager.default
-    private let localAnalyticsCacheVersion = 7
+    private let localAnalyticsCacheVersion = 8
     private let sessionUsageCacheVersion = 4
     private static let sessionUsageCacheLimit = 1_024
     private static let persistentSessionUsageCacheWriteInterval: TimeInterval = 15 * 60
@@ -1268,11 +1291,25 @@ final class CodexUsageReader {
         return int64Value(summary["lifetimeTokens"])
     }
 
+    private func codexDatabasePaths(context: RuntimeLoadContext) -> [String] {
+        let home = context.homeDirectory.path
+        let candidates = [
+            [
+                home + "/.codex/state_5.sqlite",
+                home + "/.codex/sqlite/state_5.sqlite"
+            ],
+            [
+                home + "/.openclaw/agents/codex/agent/codex-home/state_5.sqlite",
+                home + "/.openclaw/agents/codex/agent/codex-home/sqlite/state_5.sqlite"
+            ]
+        ]
+        var seen = Set<String>()
+        return candidates.compactMap(firstExistingPath).filter { seen.insert($0).inserted }
+    }
+
     private func readLocalUsage(context: RuntimeLoadContext, messages: inout [String]) -> LocalUsage? {
-        guard let dbPath = firstExistingPath([
-            NSHomeDirectory() + "/.codex/state_5.sqlite",
-            NSHomeDirectory() + "/.codex/sqlite/state_5.sqlite"
-        ]) else {
+        let dbPaths = codexDatabasePaths(context: context)
+        guard !dbPaths.isEmpty else {
             messages.append("未找到 Codex state_5.sqlite")
             return nil
         }
@@ -1323,13 +1360,19 @@ final class CodexUsageReader {
         ORDER BY updated_at ASC;
         """
 
-        guard
-            let totalsObject = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: totalsQuery).first,
-            let recentObjects = Optional(runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: recentQuery)),
-            let dailyObjects = Optional(runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: dailyQuery))
-        else {
+        let totalsObjects = dbPaths.compactMap {
+            runSQLiteJSON(sqlitePath: sqlitePath, dbPath: $0, query: totalsQuery).first
+        }
+        guard !totalsObjects.isEmpty else {
             messages.append("SQLite 查询失败")
             return nil
+        }
+        let recentObjects = dbPaths
+            .flatMap { runSQLiteJSON(sqlitePath: sqlitePath, dbPath: $0, query: recentQuery) }
+            .sorted { (dateFromEpoch($0["updatedAt"]) ?? .distantPast) > (dateFromEpoch($1["updatedAt"]) ?? .distantPast) }
+            .prefix(5)
+        let dailyObjects = dbPaths.flatMap {
+            runSQLiteJSON(sqlitePath: sqlitePath, dbPath: $0, query: dailyQuery)
         }
 
         let recent = recentObjects.map { object in
@@ -1363,32 +1406,41 @@ final class CodexUsageReader {
 
         let analytics = readLocalAnalytics(
             sqlitePath: sqlitePath,
-            dbPath: dbPath,
+            dbPaths: dbPaths,
             dayStart: dayStart,
             sevenDayStart: sevenDayStart,
             statistics: context.statistics,
             messages: &messages
         )
-        let allProjects = readAllTimeProjects(sqlitePath: sqlitePath, dbPath: dbPath)
+        let allProjects = readAllTimeProjects(sqlitePath: sqlitePath, dbPaths: dbPaths)
         let projectBoard = ProjectBoard(
             recentProjects: analytics.recentProjects.isEmpty
-                ? readApproximateRecentProjects(sqlitePath: sqlitePath, dbPath: dbPath, sevenDayStart: sevenDayStart)
+                ? readApproximateRecentProjects(sqlitePath: sqlitePath, dbPaths: dbPaths, sevenDayStart: sevenDayStart)
                 : analytics.recentProjects,
             allProjects: allProjects
         )
 
+        let lifetimeTokens = totalsObjects.reduce(Int64(0)) { $0 + (int64Value($1["lifetimeTokens"]) ?? 0) }
+        let todayTokens = totalsObjects.reduce(Int64(0)) { $0 + (int64Value($1["todayTokens"]) ?? 0) }
+        let sevenDayTokens = totalsObjects.reduce(Int64(0)) { $0 + (int64Value($1["sevenDayTokens"]) ?? 0) }
+        let threadCount = totalsObjects.reduce(0) { $0 + (intValue($1["threadCount"]) ?? 0) }
+        let lastUpdatedAt = totalsObjects.compactMap { dateFromEpoch($0["lastUpdatedAt"]) }.max()
+        if dbPaths.contains(where: { $0.contains("/.openclaw/agents/codex/") }) {
+            messages.append("Codex 用量已包含 OpenClaw 调用 Codex 产生的本机记录")
+        }
+
         return LocalUsage(
-            lifetimeTokens: int64Value(totalsObject["lifetimeTokens"]) ?? 0,
-            todayTokens: int64Value(totalsObject["todayTokens"]) ?? 0,
-            sevenDayTokens: int64Value(totalsObject["sevenDayTokens"]) ?? 0,
-            threadCount: intValue(totalsObject["threadCount"]) ?? 0,
-            lastUpdatedAt: dateFromEpoch(totalsObject["lastUpdatedAt"]),
+            lifetimeTokens: lifetimeTokens,
+            todayTokens: todayTokens,
+            sevenDayTokens: sevenDayTokens,
+            threadCount: threadCount,
+            lastUpdatedAt: lastUpdatedAt,
             dailyBuckets: dailyBuckets,
             recentThreads: recent,
             detailedUsage: analytics.detailedUsage,
             usageTrend: analytics.usageTrend ?? readApproximateUsageTrend(
                 sqlitePath: sqlitePath,
-                dbPath: dbPath,
+                dbPaths: dbPaths,
                 dayStart: dayStart,
                 sevenDayStart: sevenDayStart,
                 calendar: calendar
@@ -1401,7 +1453,7 @@ final class CodexUsageReader {
 
     private func readLocalAnalytics(
         sqlitePath: String,
-        dbPath: String,
+        dbPaths: [String],
         dayStart: Date,
         sevenDayStart: Date,
         statistics: StatisticsContext,
@@ -1419,7 +1471,9 @@ final class CodexUsageReader {
         """
 
         var seenPaths = Set<String>()
-        let sources = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: sourceQuery).compactMap { object -> SessionUsageSource? in
+        let sources = dbPaths
+            .flatMap { runSQLiteJSON(sqlitePath: sqlitePath, dbPath: $0, query: sourceQuery) }
+            .compactMap { object -> SessionUsageSource? in
             guard let path = object["rolloutPath"] as? String, !path.isEmpty, seenPaths.insert(path).inserted else {
                 return nil
             }
@@ -1430,7 +1484,7 @@ final class CodexUsageReader {
                 cwd: object["cwd"] as? String ?? "",
                 updatedAt: dateFromEpoch(object["updatedAt"])
             )
-        }
+            }
 
         guard !sources.isEmpty else {
             messages.append("未找到 Codex session 日志")
@@ -1754,7 +1808,7 @@ final class CodexUsageReader {
 
     private func readApproximateUsageTrend(
         sqlitePath: String,
-        dbPath: String,
+        dbPaths: [String],
         dayStart: Date,
         sevenDayStart: Date,
         calendar: Calendar
@@ -1774,7 +1828,9 @@ final class CodexUsageReader {
         ORDER BY updated_at ASC;
         """
 
-        let rows = runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: query)
+        let rows = dbPaths.flatMap {
+            runSQLiteJSON(sqlitePath: sqlitePath, dbPath: $0, query: query)
+        }
         guard !rows.isEmpty else { return nil }
 
         var dailyUsage: [String: PricedTokenUsage] = [:]
@@ -1806,7 +1862,7 @@ final class CodexUsageReader {
         )
     }
 
-    private func readAllTimeProjects(sqlitePath: String, dbPath: String) -> [ProjectUsage] {
+    private func readAllTimeProjects(sqlitePath: String, dbPaths: [String]) -> [ProjectUsage] {
         let query = """
         SELECT cwd, COUNT(*) AS threadCount, COALESCE(SUM(tokens_used), 0) AS tokens, MAX(CASE WHEN recency_at > 0 THEN recency_at ELSE updated_at END) AS lastActiveAt
         FROM threads
@@ -1816,7 +1872,8 @@ final class CodexUsageReader {
         LIMIT 24;
         """
 
-        return runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: query).map { row in
+        let projects = dbPaths.flatMap { dbPath in
+            runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: query).map { row in
             let path = row["cwd"] as? String ?? ""
             return ProjectUsage(
                 id: path.isEmpty ? "uncategorized" : path,
@@ -1828,12 +1885,14 @@ final class CodexUsageReader {
                 lastActiveAt: dateFromEpoch(row["lastActiveAt"]),
                 sourceQuality: .approximate
             )
+            }
         }
+        return mergeApproximateProjects(projects)
     }
 
     private func readApproximateRecentProjects(
         sqlitePath: String,
-        dbPath: String,
+        dbPaths: [String],
         sevenDayStart: Date
     ) -> [ProjectUsage] {
         let query = """
@@ -1846,7 +1905,8 @@ final class CodexUsageReader {
         LIMIT 24;
         """
 
-        return runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: query).map { row in
+        let projects = dbPaths.flatMap { dbPath in
+            runSQLiteJSON(sqlitePath: sqlitePath, dbPath: dbPath, query: query).map { row in
             let path = row["cwd"] as? String ?? ""
             return ProjectUsage(
                 id: path.isEmpty ? "uncategorized" : path,
@@ -1858,7 +1918,49 @@ final class CodexUsageReader {
                 lastActiveAt: dateFromEpoch(row["lastActiveAt"]),
                 sourceQuality: .approximate
             )
+            }
         }
+        return mergeApproximateProjects(projects)
+    }
+
+    private func mergeApproximateProjects(_ projects: [ProjectUsage]) -> [ProjectUsage] {
+        struct ProjectTotals {
+            var tokens: Int64 = 0
+            var threadCount: Int = 0
+            var lastActiveAt: Date?
+        }
+
+        var totalsByPath: [String: ProjectTotals] = [:]
+        for project in projects {
+            var totals = totalsByPath[project.fullPath] ?? ProjectTotals()
+            totals.tokens += project.tokens
+            totals.threadCount += project.threadCount
+            if let candidate = project.lastActiveAt,
+               totals.lastActiveAt == nil || candidate > (totals.lastActiveAt ?? .distantPast) {
+                totals.lastActiveAt = candidate
+            }
+            totalsByPath[project.fullPath] = totals
+        }
+
+        var merged: [ProjectUsage] = []
+        merged.reserveCapacity(totalsByPath.count)
+        for (path, totals) in totalsByPath {
+            let project = ProjectUsage(
+                id: path.isEmpty ? "uncategorized" : path,
+                name: path.isEmpty ? "未归类" : shortWorkspaceName(path),
+                fullPath: path,
+                tokens: totals.tokens,
+                estimatedCostUSD: nil,
+                threadCount: totals.threadCount,
+                lastActiveAt: totals.lastActiveAt,
+                sourceQuality: .approximate
+            )
+            merged.append(project)
+        }
+        merged.sort { left, right in
+            left.tokens == right.tokens ? left.name < right.name : left.tokens > right.tokens
+        }
+        return Array(merged.prefix(24))
     }
 
     private func makeSkillUsages(from accumulators: [String: SkillUsageAccumulator]) -> [SkillUsage] {
@@ -1876,15 +1978,32 @@ final class CodexUsageReader {
     }
 
     private func skillStaticInfo(for path: String) -> SkillStaticInfo {
-        let url = URL(fileURLWithPath: path)
-        guard let data = try? Data(contentsOf: url) else {
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        let allowedRoots = [
+            home.appendingPathComponent(".codex/skills", isDirectory: true),
+            home.appendingPathComponent(".codex/plugins", isDirectory: true),
+            home.appendingPathComponent(".openclaw/workspace/skills", isDirectory: true)
+        ]
+        guard allowedRoots.contains(where: { root in
+            url.path.hasPrefix(root.path + "/")
+        }) else {
+            return SkillStaticInfo(tokenEstimate: nil, byteCount: nil)
+        }
+
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let byteCount = (attributes[.size] as? NSNumber)?.int64Value,
+              byteCount <= 1_000_000,
+              let data = try? Data(contentsOf: url, options: [.mappedIfSafe])
+        else {
             return SkillStaticInfo(tokenEstimate: nil, byteCount: nil)
         }
 
         let text = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
         return SkillStaticInfo(
             tokenEstimate: estimateStaticTokens(text),
-            byteCount: Int64(data.count)
+            byteCount: byteCount
         )
     }
 
@@ -2134,10 +2253,12 @@ final class CodexUsageReader {
             if let name = payload["name"] as? String, !name.isEmpty {
                 toolCalls[name, default: 0] += 1
             }
+            let paths = skillLoadPaths(in: payload)
+            guard !paths.isEmpty else { return }
             let eventDate = (object["timestamp"] as? String).flatMap {
                 fractionalFormatter.date(from: $0) ?? plainFormatter.date(from: $0)
             }
-            for path in skillLoadPaths(in: payload) {
+            for path in paths {
                 skillLoads.append(SkillLoadEvent(path: path, date: eventDate))
             }
             return
@@ -2146,12 +2267,8 @@ final class CodexUsageReader {
         guard payloadType == "token_count",
               let timestamp = object["timestamp"] as? String,
               let info = payload["info"] as? [String: Any],
-              let totalUsage = info["total_token_usage"] as? [String: Any],
-              let date = fractionalFormatter.date(from: timestamp) ?? plainFormatter.date(from: timestamp)
+              let totalUsage = info["total_token_usage"] as? [String: Any]
         else { return }
-
-        sawTokenEvent = true
-        tokenEventCount += 1
 
         let current = TokenBreakdown(
             inputTokens: int64Value(totalUsage["input_tokens"]) ?? 0,
@@ -2167,7 +2284,11 @@ final class CodexUsageReader {
         }
         previous = current
 
-        guard !delta.isZero else { return }
+        sawTokenEvent = true
+        tokenEventCount += 1
+        guard !delta.isZero,
+              let date = fractionalFormatter.date(from: timestamp) ?? plainFormatter.date(from: timestamp)
+        else { return }
         deltas.append(SessionUsageDelta(date: date, tokens: delta))
     }
 
@@ -2181,16 +2302,19 @@ final class CodexUsageReader {
         var pendingItems: [TaskItem] = []
         var doneItems: [TaskItem] = []
 
+        let home = context.homeDirectory.path
         if let dbPath = firstExistingPath([
-            NSHomeDirectory() + "/.codex/state_5.sqlite",
-            NSHomeDirectory() + "/.codex/sqlite/state_5.sqlite"
+            home + "/.codex/state_5.sqlite",
+            home + "/.codex/sqlite/state_5.sqlite"
         ]), let sqlitePath = firstExistingPath([
             "/usr/bin/sqlite3",
             "/opt/homebrew/bin/sqlite3",
             "/opt/homebrew/share/android-commandlinetools/platform-tools/sqlite3"
         ]) {
             let todayThreadsQuery = """
-            SELECT id, title, preview, cwd, tokens_used AS tokens, updated_at AS updatedAt, recency_at AS recencyAt, model
+            SELECT id, title, preview, first_user_message AS firstUserMessage,
+                   rollout_path AS rolloutPath, cwd, tokens_used AS tokens,
+                   updated_at AS updatedAt, recency_at AS recencyAt, model
             FROM threads
             WHERE archived = 0
               AND preview <> ''
@@ -2203,7 +2327,9 @@ final class CodexUsageReader {
             """
 
             let archivedTodayQuery = """
-            SELECT id, title, preview, cwd, tokens_used AS tokens, COALESCE(archived_at, updated_at) AS updatedAt, model
+            SELECT id, title, preview, first_user_message AS firstUserMessage,
+                   rollout_path AS rolloutPath, cwd, tokens_used AS tokens,
+                   COALESCE(archived_at, updated_at) AS updatedAt, model
             FROM threads
             WHERE archived = 1
               AND COALESCE(archived_at, updated_at) >= \(Int(dayStart.timeIntervalSince1970))
@@ -2240,7 +2366,8 @@ final class CodexUsageReader {
     }
 
     private func makeThreadTaskItem(object: [String: Any], updatedAt: Date?, kind: TaskColumnKind) -> TaskItem {
-        let rawId = object["id"] as? String ?? UUID().uuidString
+        let rawThreadID = object["id"] as? String
+        let rawId = rawThreadID ?? UUID().uuidString
         let title = normalizedTitle(object["title"] as? String, fallback: object["preview"] as? String)
         let cwd = object["cwd"] as? String ?? ""
         let tokens = int64Value(object["tokens"]) ?? 0
@@ -2263,6 +2390,11 @@ final class CodexUsageReader {
             shortWorkspaceName(cwd),
             tokens > 0 ? formatTokens(tokens) : nil
         ].compactMap { $0 }.filter { !$0.isEmpty }
+        let summary = taskDisplayText(
+            (object["firstUserMessage"] as? String) ?? (object["preview"] as? String),
+            limit: 1_200
+        )
+        let recentReply = lastCodexAssistantReply(at: object["rolloutPath"] as? String)
 
         return TaskItem(
             id: rawId + kind.rawValue,
@@ -2272,8 +2404,44 @@ final class CodexUsageReader {
             chip: chip,
             updatedAt: updatedAt,
             tokens: tokens,
-            kind: kind
+            kind: kind,
+            source: .codex,
+            summary: summary,
+            recentReply: recentReply,
+            navigationTarget: TaskNavigationTarget.codexThread(id: rawThreadID)
         )
+    }
+
+    private func lastCodexAssistantReply(at path: String?) -> String? {
+        guard let path, !path.isEmpty,
+              let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path)) else {
+            return nil
+        }
+        defer { try? handle.close() }
+
+        let fileSize = (try? handle.seekToEnd()) ?? 0
+        let readSize: UInt64 = min(fileSize, 1_500_000)
+        try? handle.seek(toOffset: fileSize - readSize)
+        guard let data = try? handle.readToEnd(), !data.isEmpty else { return nil }
+
+        for rawLine in data.split(separator: 10).reversed() {
+            guard let object = try? JSONSerialization.jsonObject(with: Data(rawLine)) as? [String: Any],
+                  object["type"] as? String == "response_item",
+                  let payload = object["payload"] as? [String: Any],
+                  payload["type"] as? String == "message",
+                  payload["role"] as? String == "assistant",
+                  let content = payload["content"] as? [[String: Any]] else {
+                continue
+            }
+            let text = content.compactMap { item -> String? in
+                guard item["type"] as? String == "output_text" else { return nil }
+                return item["text"] as? String
+            }.joined(separator: "\n")
+            if let compact = taskDisplayText(text, limit: 1_600) {
+                return compact
+            }
+        }
+        return nil
     }
 
     private func readAutomationTasks() -> [TaskItem] {
@@ -2302,7 +2470,11 @@ final class CodexUsageReader {
                 chip: kind == "heartbeat" ? "Wake" : "Cron",
                 updatedAt: dateFromEpoch(fields["updated_at"]),
                 tokens: nil,
-                kind: .scheduled
+                kind: .scheduled,
+                source: .codex,
+                summary: taskDisplayText(detail, limit: 1_200),
+                recentReply: nil,
+                navigationTarget: nil
             ))
         }
 
@@ -2744,6 +2916,16 @@ private func normalizedTitle(_ title: String?, fallback: String?) -> String {
     return String(singleLine.prefix(45)) + "..."
 }
 
+private func taskDisplayText(_ value: String?, limit: Int) -> String? {
+    guard let value else { return nil }
+    let compact = value
+        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !compact.isEmpty else { return nil }
+    if compact.count <= limit { return compact }
+    return String(compact.prefix(max(1, limit - 1))) + "…"
+}
+
 private func shortWorkspaceName(_ path: String) -> String {
     guard !path.isEmpty else { return "" }
     let url = URL(fileURLWithPath: path)
@@ -2925,6 +3107,7 @@ final class AppSettings: ObservableObject {
     private static let keepMainWindowOnTopKey = "codexU.keepMainWindowOnTop"
     private static let keepRunningWhenMainWindowClosedKey = "codexU.keepRunningWhenMainWindowClosed"
     private static let visibleRuntimeScopesKey = "codexU.visibleRuntimeScopes"
+    private static let openClawCustomMigrationKey = "codexU.openClawCustomMigrationV1"
     private static let automaticUpdateChecksEnabledKey = "codexU.update.autoCheckEnabled"
     private static let skippedUpdateVersionKey = "codexU.update.skippedVersion"
 
@@ -3000,13 +3183,15 @@ final class AppSettings: ObservableObject {
         } else {
             keepRunningWhenMainWindowClosed = defaults.bool(forKey: Self.keepRunningWhenMainWindowClosedKey)
         }
-        if defaults.object(forKey: Self.automaticUpdateChecksEnabledKey) == nil {
-            automaticUpdateChecksEnabled = true
-        } else {
-            automaticUpdateChecksEnabled = defaults.bool(forKey: Self.automaticUpdateChecksEnabledKey)
-        }
+        // Local OpenClaw customizations must not be overwritten by an upstream DMG.
+        automaticUpdateChecksEnabled = false
+        defaults.set(false, forKey: Self.automaticUpdateChecksEnabledKey)
         skippedUpdateVersion = defaults.string(forKey: Self.skippedUpdateVersionKey)
-        visibleRuntimeScopes = Self.storedVisibleRuntimeScopes(defaults: defaults)
+        // The upstream app and this custom build share preferences. Always repair
+        // the runtime list so an older process cannot leave OpenClaw hidden.
+        visibleRuntimeScopes = RuntimeScope.allCases
+        defaults.set(RuntimeScope.allCases.map(\.runtimeId), forKey: Self.visibleRuntimeScopesKey)
+        defaults.set(true, forKey: Self.openClawCustomMigrationKey)
         statusItemPreferences = StatusItemPreferencesStore.load(defaults: defaults)
         let storedShortcut = GlobalShortcut.load(defaults: defaults)
         if let storedShortcut, storedShortcut.validationError != nil {
@@ -3157,6 +3342,7 @@ struct UsageWidgetView: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var settings: AppSettings
     @ObservedObject var updateStore: AppUpdateStore
+    @StateObject private var systemMonitor = LocalSystemMonitor()
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -3169,6 +3355,7 @@ struct UsageWidgetView: View {
     static let windowCornerRadius: CGFloat = 18
 
     private var snapshot: UsageSnapshot { store.snapshot }
+    private var combinedTaskBoard: TaskBoard? { store.multiRuntimeSnapshot.aggregate.taskBoard }
     private var language: WidgetLanguage { settings.language }
     private var themeMode: WidgetThemeMode { settings.themeMode }
     private var selectedQuotaIsStale: Bool {
@@ -3192,9 +3379,11 @@ struct UsageWidgetView: View {
         .readableForegroundHierarchy(effectiveColorScheme)
         .onAppear {
             themeMode.applyAppearance()
+            systemMonitor.start()
             store.setTaskBoardSelected(selectedDashboardTab == .tasks)
         }
         .onDisappear {
+            systemMonitor.stop()
             store.setTaskBoardSelected(false)
         }
         .onChange(of: selectedDashboardTab) { _, tab in
@@ -3235,6 +3424,7 @@ struct UsageWidgetView: View {
                         environmentChecklistSection
                     }
                     usageOverviewSection
+                    LocalSystemStatusStrip(snapshot: systemMonitor.snapshot, language: language)
                     dashboardTabsSection
                 }
                 .padding(.bottom, 2)
@@ -3292,24 +3482,29 @@ struct UsageWidgetView: View {
 
     private var usageOverviewSection: some View {
         HStack(alignment: .center, spacing: 26) {
-            VStack(spacing: 8) {
-                DualQuotaRing(
-                    fiveHourQuota: snapshot.fiveHourQuota,
-                    sevenDayQuota: snapshot.sevenDayQuota,
-                    quotaReadSucceeded: snapshot.quotaReadSucceeded,
-                    quotaIsStale: selectedQuotaIsStale,
-                    language: language,
-                    visualEnergyMode: store.visualEnergyMode,
-                    animationMode: settings.particleAnimationMode
-                )
-                .frame(width: 145, height: 145)
+            if store.selectedRuntimeScope == .openClaw {
+                OpenClawLocalOverviewCard(language: language)
+                    .frame(width: 154, height: 179)
+            } else {
+                VStack(spacing: 8) {
+                    DualQuotaRing(
+                        fiveHourQuota: snapshot.fiveHourQuota,
+                        sevenDayQuota: snapshot.sevenDayQuota,
+                        quotaReadSucceeded: snapshot.quotaReadSucceeded,
+                        quotaIsStale: selectedQuotaIsStale,
+                        language: language,
+                        visualEnergyMode: store.visualEnergyMode,
+                        animationMode: settings.particleAnimationMode
+                    )
+                    .frame(width: 145, height: 145)
 
-                QuotaResetSummary(
-                    fiveHourQuota: snapshot.fiveHourQuota,
-                    sevenDayQuota: snapshot.sevenDayQuota,
-                    language: language
-                )
-                .frame(width: 154, height: 26)
+                    QuotaResetSummary(
+                        fiveHourQuota: snapshot.fiveHourQuota,
+                        sevenDayQuota: snapshot.sevenDayQuota,
+                        language: language
+                    )
+                    .frame(width: 154, height: 26)
+                }
             }
 
             VStack(alignment: .leading, spacing: 13) {
@@ -3319,6 +3514,7 @@ struct UsageWidgetView: View {
                         systemName: "sun.max.fill",
                         usage: snapshot.local?.detailedUsage?.today,
                         fallbackTokens: snapshot.local?.todayTokens,
+                        showsEstimatedCost: store.selectedRuntimeScope == .codex,
                         language: language
                     )
                     DetailedTokenMetricCard(
@@ -3326,6 +3522,7 @@ struct UsageWidgetView: View {
                         systemName: "calendar",
                         usage: snapshot.local?.detailedUsage?.sevenDay,
                         fallbackTokens: snapshot.local?.sevenDayTokens,
+                        showsEstimatedCost: store.selectedRuntimeScope == .codex,
                         language: language
                     )
                     DetailedTokenMetricCard(
@@ -3333,11 +3530,16 @@ struct UsageWidgetView: View {
                         systemName: "sum",
                         usage: snapshot.local?.detailedUsage?.lifetime,
                         fallbackTokens: snapshot.local?.lifetimeTokens,
+                        showsEstimatedCost: store.selectedRuntimeScope == .codex,
                         language: language
                     )
                 }
 
-                WoolProgressCard(usage: snapshot.local?.detailedUsage?.month, language: language)
+                if store.selectedRuntimeScope == .openClaw {
+                    RuntimeAttributionCard(language: language)
+                } else {
+                    WoolProgressCard(usage: snapshot.local?.detailedUsage?.month, language: language)
+                }
             }
             .frame(maxWidth: .infinity)
         }
@@ -3416,7 +3618,7 @@ struct UsageWidgetView: View {
     }
 
     private var taskBoardSummary: String {
-        guard let board = snapshot.taskBoard else { return language.text("读取中", "Loading") }
+        guard let board = combinedTaskBoard else { return language.text("读取中", "Loading") }
         return language.text(
             "\(board.totalCount) 事项 · \(timeOnly(board.refreshedAt, language: language))",
             "\(board.totalCount) items · \(timeOnly(board.refreshedAt, language: language))"
@@ -3443,7 +3645,7 @@ struct UsageWidgetView: View {
     }
 
     private var taskBoardColumns: [TaskColumn] {
-        snapshot.taskBoard?.columns ?? [
+        combinedTaskBoard?.columns ?? [
             TaskColumn(id: .active, title: localizedTaskColumnTitle(.active, language: language), count: 0, items: []),
             TaskColumn(id: .pending, title: localizedTaskColumnTitle(.pending, language: language), count: 0, items: []),
             TaskColumn(id: .scheduled, title: localizedTaskColumnTitle(.scheduled, language: language), count: 0, items: []),
@@ -3453,6 +3655,9 @@ struct UsageWidgetView: View {
 
     private var shouldShowEnvironmentChecklist: Bool {
         if snapshot.messages.contains("正在读取 codexU 数据") { return false }
+        if store.selectedRuntimeScope == .openClaw {
+            return snapshot.local == nil
+        }
         let quotaUnavailable = snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil
         let hasQuotaProtocolWarning = snapshot.messages.contains { $0.contains("额度窗口") }
         return (!snapshot.messages.isEmpty && (quotaUnavailable || hasQuotaProtocolWarning || snapshot.local == nil))
@@ -3464,27 +3669,12 @@ struct UsageWidgetView: View {
         var items: [DiagnosticItem] = []
         let messages = snapshot.messages.joined(separator: "\n")
 
-        if store.selectedRuntimeScope == .claudeCode {
-            if snapshot.fiveHourQuota == nil || snapshot.sevenDayQuota == nil {
-                let isStale = messages.contains("快照已过期")
-                items.append(DiagnosticItem(
-                    id: isStale ? "claude-statusline-stale" : "claude-statusline-missing",
-                    title: isStale
-                        ? language.text("Claude Code 快照已过期", "Claude Code snapshot is stale")
-                        : language.text("额度需要 Claude Code active session 快照", "Quota needs a Claude Code active session snapshot"),
-                    detail: isStale
-                        ? language.text("打开 Claude Code 后刷新；本机 token 统计仍可继续显示。", "Open Claude Code and refresh. Local token stats can still be shown.")
-                        : language.text("首版只读取本地 statusLine 快照；没有快照时 5 小时和 7 日额度显示为 --。", "This version only reads a local statusLine snapshot. 5-hour and 7-day quota show -- without it."),
-                    systemName: isStale ? "clock.badge.exclamationmark" : "waveform.path.ecg",
-                    tint: isStale ? WidgetPalette.statusInfo : WidgetPalette.statusWarning
-                ))
-            }
-
+        if store.selectedRuntimeScope == .openClaw {
             if snapshot.local == nil || snapshot.local?.detailedUsage == nil {
                 items.append(DiagnosticItem(
-                    id: "claude-local-usage",
-                    title: language.text("暂无 Claude Code 本机用量记录", "No local Claude Code usage records yet"),
-                    detail: language.text("本机 token 统计来自 ~/.claude/projects 下的 transcript JSONL，只读取 usage 和工具名称等结构化字段。", "Local token stats come from transcript JSONL under ~/.claude/projects and only read structured usage and tool names."),
+                    id: "openclaw-local-usage",
+                    title: language.text("暂无 OpenClaw 本机用量记录", "No local OpenClaw usage records yet"),
+                    detail: language.text("本机 token 统计来自 ~/.openclaw/agents/main/sessions，只读取 usage、模型和工具名称等结构化字段。", "Local token stats come from ~/.openclaw/agents/main/sessions and only read structured usage, model, and tool-name fields."),
                     systemName: "doc.text.magnifyingglass",
                     tint: WidgetPalette.statusInfo
                 ))
@@ -3493,7 +3683,7 @@ struct UsageWidgetView: View {
             if items.isEmpty {
                 items = snapshot.messages.prefix(3).enumerated().map { index, message in
                     DiagnosticItem(
-                        id: "claude-message-\(index)",
+                        id: "openclaw-message-\(index)",
                         title: language.text("运行提示", "Runtime note"),
                         detail: localizedReaderMessage(message, language: language),
                         systemName: "info.circle.fill",
@@ -4196,8 +4386,8 @@ struct SettingsRuntimeMultiSelectControl: View {
         switch scope {
         case .codex:
             return "Codex"
-        case .claudeCode:
-            return language.text("Claude Code", "Claude Code")
+        case .openClaw:
+            return "OpenClaw"
         }
     }
 }
@@ -6059,6 +6249,7 @@ struct DetailedTokenMetricCard: View {
     let systemName: String
     let usage: PricedTokenUsage?
     let fallbackTokens: Int64?
+    let showsEstimatedCost: Bool
     let language: WidgetLanguage
 
     private var displayTokens: Int64? {
@@ -6081,7 +6272,7 @@ struct DetailedTokenMetricCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                Text(formatUSD(usage?.estimatedCostUSD))
+                Text(showsEstimatedCost ? formatUSD(usage?.estimatedCostUSD) : language.text("本机", "Local"))
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -6208,6 +6399,85 @@ private let quotaValueWeightedPricePerMillion =
     + quotaValueOutputShare * quotaValueReferencePrice.outputPerMillion
 private let quotaValueMonthlyTokenLimit = quotaValueDailyTokenLimit * quotaValueBillingDays
 private let quotaValueMonthlyMaxUSD = quotaValueMonthlyTokenLimit / 1_000_000 * quotaValueWeightedPricePerMillion
+
+struct OpenClawLocalOverviewCard: View {
+    let language: WidgetLanguage
+
+    var body: some View {
+        VStack(spacing: 9) {
+            RuntimeLogoView(scope: .openClaw, size: 62)
+                .accessibilityHidden(true)
+            Text("OpenClaw")
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+            Text(language.text("本机 main agent", "Local main agent"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(WidgetPalette.statusSuccess)
+                    .frame(width: 6, height: 6)
+                Text(language.text("只读本机记录", "Local records only"))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(language.text("不读取 NAS", "NAS excluded"))
+                .font(.system(size: 8.5, weight: .medium))
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(12)
+        .cardBackground(cornerRadius: dashboardCardCornerRadius)
+    }
+}
+
+struct RuntimeAttributionCard: View {
+    let language: WidgetLanguage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 7) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(WidgetPalette.statusInfo)
+                Text(language.text("token 归属", "Token attribution"))
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text(language.text("按实际执行方", "By executing runtime"))
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                attributionPill(
+                    scope: .openClaw,
+                    text: language.text("main agent → OpenClaw", "main agent → OpenClaw")
+                )
+                attributionPill(
+                    scope: .codex,
+                    text: language.text("Codex 子代理 → Codex", "Codex subagent → Codex")
+                )
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(dashboardCardPadding)
+        .cardBackground(cornerRadius: dashboardCardCornerRadius)
+    }
+
+    private func attributionPill(scope: RuntimeScope, text: String) -> some View {
+        HStack(spacing: 5) {
+            RuntimeLogoView(scope: scope, size: 14)
+            Text(text)
+                .font(.system(size: 9.5, weight: .semibold))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            Capsule(style: .continuous)
+                .fill(WidgetPalette.surfaceTrack)
+        )
+    }
+}
 
 struct WoolProgressCard: View {
     let usage: PricedTokenUsage?
@@ -7734,47 +8004,211 @@ struct TaskBoardColumnView: View {
 struct TaskIssueCard: View {
     let item: TaskItem
     let language: WidgetLanguage
+    @State private var isShowingDetail = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(item.code)
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 4)
-                if let updatedAt = item.updatedAt {
-                    Text(relativeTimeText(updatedAt, language: language))
+        Button {
+            switch taskPrimaryAction(for: item) {
+            case .showDetail:
+                isShowingDetail = true
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(item.code)
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    if let updatedAt = item.updatedAt {
+                        Text(relativeTimeText(updatedAt, language: language))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Text(item.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .minimumScaleFactor(0.9)
+
+                if !item.detail.isEmpty {
+                    Text(localizedTaskDetail(item.detail, language: language))
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+
+                HStack(spacing: 5) {
+                    TaskSourceBadge(source: item.source)
+                    TaskChip(text: item.chip, kind: item.kind)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.tertiary)
                 }
             }
+            .padding(dashboardRowPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardBackground(cornerRadius: dashboardRowCornerRadius, elevated: true)
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $isShowingDetail) {
+            TaskDetailView(item: item, language: language)
+        }
+    }
+}
 
-            Text(item.title)
-                .font(.system(size: 11, weight: .semibold))
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .minimumScaleFactor(0.9)
+struct TaskSourceBadge: View {
+    let source: RuntimeScope
 
-            if !item.detail.isEmpty {
-                Text(localizedTaskDetail(item.detail, language: language))
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+    var body: some View {
+        HStack(spacing: 4) {
+            RuntimeLogoView(scope: source, size: 12)
+            Text(source.displayName)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(
+            Capsule(style: .continuous)
+                .fill(WidgetPalette.surfaceTrack)
+        )
+    }
+}
+
+struct TaskDetailView: View {
+    let item: TaskItem
+    let language: WidgetLanguage
+    @Environment(\.dismiss) private var dismiss
+    @State private var openErrorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 10) {
+                RuntimeLogoView(scope: item.source, size: 30)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.title)
+                        .font(.system(size: 17, weight: .semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 6) {
+                        TaskSourceBadge(source: item.source)
+                        TaskChip(text: item.chip, kind: item.kind)
+                        if let updatedAt = item.updatedAt {
+                            Text(taskDetailDateText(updatedAt))
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Spacer(minLength: 8)
+                if let target = item.codexNavigationTarget {
+                    Button {
+                        openInCodex(target)
+                    } label: {
+                        Label(
+                            language.text("在 Codex 中打开", "Open in Codex"),
+                            systemImage: "arrow.up.forward.app"
+                        )
+                        .font(.system(size: 11, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help(language.text("使用 Codex 打开此线程", "Open this thread in Codex"))
+                }
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(language.text("关闭", "Close"))
             }
 
-            HStack(spacing: 5) {
-                TaskChip(text: item.chip, kind: item.kind)
-                Spacer(minLength: 4)
-                TaskAvatar(text: taskAvatarText(item), kind: item.kind)
+            Divider()
+
+            if let openErrorMessage {
+                HStack(alignment: .top, spacing: 7) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(WidgetPalette.statusDanger)
+                    Text(openErrorMessage)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
+                        .fill(WidgetPalette.statusDanger.opacity(0.08))
+                )
+            }
+
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 16) {
+                    taskDetailSection(
+                        title: language.text("任务摘要", "Task summary"),
+                        systemName: "text.alignleft",
+                        text: item.summary ?? language.text("暂无摘要", "No summary available")
+                    )
+                    taskDetailSection(
+                        title: language.text("最近回复", "Latest reply"),
+                        systemName: "bubble.left.and.bubble.right.fill",
+                        text: item.recentReply ?? language.text("暂无最近回复", "No recent reply available")
+                    )
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(dashboardRowPadding)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .cardBackground(cornerRadius: dashboardRowCornerRadius, elevated: true)
+        .padding(20)
+        .frame(minWidth: 560, maxWidth: 560, minHeight: 380, maxHeight: 560, alignment: .topLeading)
     }
+
+    private func openInCodex(_ target: TaskNavigationTarget) {
+        openErrorMessage = nil
+        guard let url = target.url, NSWorkspace.shared.open(url) else {
+            openErrorMessage = language.text(
+                "无法在 Codex 中打开此任务，请确认 Codex 已安装后重试。",
+                "Could not open this task in Codex. Confirm Codex is installed, then try again."
+            )
+            return
+        }
+    }
+
+    private func taskDetailSection(title: String, systemName: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: systemName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.system(size: 12, weight: .regular))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
+                        .fill(WidgetPalette.surfaceTrack.opacity(0.55))
+                )
+        }
+    }
+}
+
+private func taskDetailDateText(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale.current
+    formatter.dateStyle = .medium
+    formatter.timeStyle = .short
+    return formatter.string(from: date)
 }
 
 struct TaskAvatar: View {
@@ -8681,6 +9115,10 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
                             "title": item.title,
                             "detail": item.detail,
                             "chip": item.chip,
+                            "source": item.source.runtimeId,
+                            "hasSummary": item.summary != nil,
+                            "hasRecentReply": item.recentReply != nil,
+                            "hasNavigationTarget": item.codexNavigationTarget != nil,
                             "updatedAt": jsonValue(isoString(item.updatedAt)),
                             "tokens": jsonValue(item.tokens)
                         ] as [String: Any]
@@ -9554,6 +9992,14 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-statistics-time-zone") {
             exit(StatisticsTimeZoneSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-task-navigation") {
+            exit(TaskNavigationSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-local-system") {
+            exit(LocalSystemMonitorSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--dump-json") {

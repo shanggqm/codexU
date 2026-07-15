@@ -2,12 +2,17 @@ import Foundation
 
 enum RuntimeScope: String, CaseIterable, Identifiable, Codable, Equatable {
     case codex
-    case claudeCode
+    case openClaw
 
     var id: String { rawValue }
 
     static func storedIdentifier(_ value: String) -> RuntimeScope? {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // This custom build replaces the former Claude Code slot with OpenClaw.
+        // Migrate an existing v1.0.5 preference so OpenClaw is not hidden after upgrade.
+        if normalized == "claudecode" || normalized == "claude-code" {
+            return .openClaw
+        }
         return allCases.first { scope in
             scope.rawValue.lowercased() == normalized || scope.runtimeId.lowercased() == normalized
         }
@@ -17,8 +22,8 @@ enum RuntimeScope: String, CaseIterable, Identifiable, Codable, Equatable {
         switch self {
         case .codex:
             return "codex"
-        case .claudeCode:
-            return "claude-code"
+        case .openClaw:
+            return "openclaw"
         }
     }
 
@@ -26,8 +31,8 @@ enum RuntimeScope: String, CaseIterable, Identifiable, Codable, Equatable {
         switch self {
         case .codex:
             return "Codex"
-        case .claudeCode:
-            return "Claude Code"
+        case .openClaw:
+            return "OpenClaw"
         }
     }
 }

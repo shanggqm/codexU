@@ -19,9 +19,29 @@ struct AgentUsageAggregator {
             credits: nil,
             cloudLifetimeTokens: nil,
             local: local,
-            taskBoard: nil,
+            taskBoard: mergeTaskBoards(runtimes.compactMap { $0.snapshot.taskBoard }, at: refreshedAt),
             messages: messages
         )
+    }
+
+    private func mergeTaskBoards(_ boards: [TaskBoard], at refreshedAt: Date) -> TaskBoard? {
+        guard !boards.isEmpty else { return nil }
+        let order: [TaskColumnKind] = [.active, .pending, .scheduled, .done]
+        let columns = order.map { kind -> TaskColumn in
+            let sourceColumns = boards
+                .flatMap(\.columns)
+                .filter { $0.id == kind }
+            let allItems = sourceColumns
+                .flatMap(\.items)
+                .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
+            return TaskColumn(
+                id: kind,
+                title: kind.rawValue,
+                count: sourceColumns.reduce(0) { $0 + $1.count },
+                items: Array(allItems.prefix(6))
+            )
+        }
+        return TaskBoard(refreshedAt: refreshedAt, columns: columns)
     }
 
     private func aggregateLocalUsage(_ locals: [LocalUsage]) -> LocalUsage? {

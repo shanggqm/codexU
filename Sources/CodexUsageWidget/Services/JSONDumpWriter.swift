@@ -167,7 +167,11 @@ private func runtimeJSONObject(_ taskBoard: TaskBoard) -> [String: Any] {
                         "detail": item.detail,
                         "chip": item.chip,
                         "updatedAt": runtimeJSONValue(runtimeISOString(item.updatedAt)),
-                        "tokens": runtimeJSONValue(item.tokens)
+                        "tokens": runtimeJSONValue(item.tokens),
+                        "source": item.source.runtimeId,
+                        "hasSummary": item.summary != nil,
+                        "hasRecentReply": item.recentReply != nil,
+                        "hasNavigationTarget": item.codexNavigationTarget != nil
                     ] as [String: Any]
                 }
             ] as [String: Any]

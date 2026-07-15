@@ -1,5 +1,160 @@
 import SwiftUI
 
+struct LocalSystemStatusStrip: View {
+    let snapshot: LocalSystemSnapshot
+    let language: WidgetLanguage
+
+    var body: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 7) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(language.text("本机状态", "Local system"))
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .frame(width: 110, alignment: .leading)
+
+            systemMetric(
+                title: "CPU",
+                value: snapshot.cpuUsagePercent.map { String(format: "%.0f%%", $0) } ?? "--",
+                detail: language.text("系统总占用", "System total"),
+                systemName: "cpu",
+                tint: metricTint(snapshot.cpuUsagePercent)
+            )
+            Divider().frame(height: 34)
+            systemMetric(
+                title: language.text("内存", "Memory"),
+                value: memoryPercentText,
+                detail: memoryDetailText,
+                systemName: "memorychip",
+                tint: metricTint(memoryPercent)
+            )
+            Divider().frame(height: 34)
+            systemMetric(
+                title: language.text("温度 / 热状态", "Temperature / thermal"),
+                value: temperatureText,
+                detail: temperatureDetailText,
+                systemName: "thermometer.medium",
+                tint: thermalTint
+            )
+            .help(language.text(
+                "优先显示温度传感器；本机没有可用的公开传感器时显示 macOS 热状态。",
+                "Shows a sensor temperature when available; otherwise shows the macOS thermal state."
+            ))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .sectionBackground()
+        .accessibilityElement(children: .contain)
+    }
+
+    private func systemMetric(
+        title: String,
+        value: String,
+        detail: String,
+        systemName: String,
+        tint: Color
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(title)
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text(value)
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+                Text(detail)
+                    .font(.system(size: 8.5, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+    }
+
+    private var memoryPercent: Double? {
+        guard let used = snapshot.memoryUsedBytes,
+              let total = snapshot.memoryTotalBytes,
+              total > 0 else { return nil }
+        return Double(used) / Double(total) * 100
+    }
+
+    private var memoryPercentText: String {
+        memoryPercent.map { String(format: "%.0f%%", $0) } ?? "--"
+    }
+
+    private var memoryDetailText: String {
+        guard let used = snapshot.memoryUsedBytes,
+              let total = snapshot.memoryTotalBytes else {
+            return language.text("系统物理内存", "Physical memory")
+        }
+        return "\(formatSystemBytes(used)) / \(formatSystemBytes(total))"
+    }
+
+    private var temperatureText: String {
+        if let temperature = snapshot.temperatureCelsius {
+            return String(format: "%.0f°C", temperature)
+        }
+        switch snapshot.thermalLevel {
+        case .nominal:
+            return language.text("正常", "Normal")
+        case .fair:
+            return language.text("偏热", "Warm")
+        case .serious:
+            return language.text("较热", "Hot")
+        case .critical:
+            return language.text("严重", "Critical")
+        case .unknown:
+            return "--"
+        }
+    }
+
+    private var temperatureDetailText: String {
+        snapshot.temperatureCelsius == nil
+            ? language.text("macOS 热状态", "macOS thermal state")
+            : language.text("本机传感器", "Local sensor")
+    }
+
+    private var thermalTint: Color {
+        switch snapshot.thermalLevel {
+        case .nominal:
+            return WidgetPalette.statusSuccess
+        case .fair:
+            return WidgetPalette.statusWarning
+        case .serious, .critical:
+            return WidgetPalette.statusDanger
+        case .unknown:
+            return WidgetPalette.statusInfo
+        }
+    }
+
+    private func metricTint(_ percent: Double?) -> Color {
+        guard let percent else { return WidgetPalette.statusInfo }
+        if percent >= 90 { return WidgetPalette.statusDanger }
+        if percent >= 75 { return WidgetPalette.statusWarning }
+        return WidgetPalette.statusSuccess
+    }
+
+    private func formatSystemBytes(_ bytes: UInt64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useGB]
+        formatter.countStyle = .memory
+        formatter.includesUnit = true
+        formatter.isAdaptive = true
+        return formatter.string(fromByteCount: Int64(clamping: bytes))
+    }
+}
+
 struct RuntimeSelector: View {
     @Environment(\.colorScheme) private var colorScheme
     let selected: RuntimeScope
@@ -21,7 +176,7 @@ struct RuntimeSelector: View {
                             .minimumScaleFactor(0.82)
                     }
                     .foregroundStyle(selected == scope ? .primary : .secondary)
-                    .frame(minWidth: scope == .claudeCode ? 112 : 78, minHeight: titlebarControlHeight)
+                    .frame(minWidth: scope == .openClaw ? 104 : 78, minHeight: titlebarControlHeight)
                     .padding(.horizontal, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -47,8 +202,8 @@ struct RuntimeSelector: View {
         switch scope {
         case .codex:
             return "Codex"
-        case .claudeCode:
-            return language.text("Claude Code", "Claude Code")
+        case .openClaw:
+            return "OpenClaw"
         }
     }
 }
@@ -415,11 +570,8 @@ struct RuntimeSummaryCard: View {
                 return summary.status == .available
                     ? "官方额度：当前无限制 · 本机统计"
                     : "本机统计；额度暂不可用"
-            case .claudeCode:
-                if hasQuota {
-                    return summary.status == .stale ? "过期快照 + 本机统计" : "active snapshot + 本机统计"
-                }
-                return "本机统计；额度需 active snapshot"
+            case .openClaw:
+                return "本机 OpenClaw 记录"
             }
         }
         switch summary.scope {
@@ -428,11 +580,8 @@ struct RuntimeSummaryCard: View {
             return summary.status == .available
                 ? "Official quota: no active limits · local records"
                 : "Local records; quota unavailable"
-        case .claudeCode:
-            if hasQuota {
-                return summary.status == .stale ? "Stale snapshot + local records" : "Active snapshot + local records"
-            }
-            return "Local records; quota needs active snapshot"
+        case .openClaw:
+            return "Local OpenClaw records"
         }
     }
 }
@@ -477,8 +626,8 @@ struct RuntimeLogoView: View {
         switch scope {
         case .codex:
             return "terminal"
-        case .claudeCode:
-            return "curlybraces"
+        case .openClaw:
+            return "pawprint.fill"
         }
     }
 }
@@ -489,8 +638,8 @@ private enum RuntimeLogo {
         switch scope {
         case .codex:
             name = "codex-color"
-        case .claudeCode:
-            name = "claudecode-color"
+        case .openClaw:
+            name = "openclaw-color"
         }
         guard let url = Bundle.main.url(forResource: name, withExtension: "png") else {
             return nil

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Replaced the Claude Code runtime with local OpenClaw main-agent transcript statistics and local task ingestion.
+- Kept Codex and OpenClaw token totals separate by execution runtime, including Codex runs invoked from OpenClaw in Codex totals.
+- Added Codex/OpenClaw task-source badges and task detail views for summaries and latest replies.
+- Added a validated `codex://threads/<thread-id>` action in Codex task details while keeping task-card clicks in the existing detail mode.
+- Added a lightweight local CPU, physical-memory, and macOS thermal-state monitor; sensor temperature is shown only when a usable local sensor is available.
+- Avoided startup stalls by lazily parsing session timestamps and by never opening Skill files outside the local Codex/OpenClaw Skill roots for static estimates.
+- Disabled automatic upstream update checks for the local OpenClaw custom build.
+
 ## 1.0.5 - 2026-07-14
 
 - Codex 额度展示会按可信响应中的实际窗口数量自适应：仅有 7 天额度时使用单环、单进度条和居中百分比；双窗口恢复完整双环；服务明确返回零个额度限制时显示无限制状态。

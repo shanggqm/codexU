@@ -36,6 +36,8 @@ mkdir -p "$DMG_ROOT" "$DIST_DIR"
 
 ditto "$APP_DIR" "$DMG_ROOT/$APP_NAME.app"
 ln -s /Applications "$DMG_ROOT/Applications"
+cp "$PWD/LICENSE" "$DMG_ROOT/LICENSE.txt"
+cp "$PWD/THIRD_PARTY_NOTICES.md" "$DMG_ROOT/THIRD_PARTY_NOTICES.md"
 
 cat > "$DMG_ROOT/README.txt" <<README
 ${DISPLAY_NAME} ${VERSION}
@@ -56,8 +58,13 @@ ${DISPLAY_NAME} ${VERSION}
 - 菜单栏图标可以打开 Runtime 浮窗、主窗口、设置或退出应用。
 
 隐私:
-- 本应用只读取本机 Codex app-server、~/.codex 和可选 ~/.claude 的本地统计数据。
+- 本应用只读取本机 Codex app-server、~/.codex 和 ~/.openclaw 的本地统计数据。
 - 不读取认证 token，不上传数据。
+
+来源与致谢:
+- 本定制版基于 https://github.com/shanggqm/codexU v1.0.5，感谢原作者 Guomeiqing 开放源码。
+- OpenClaw 集成基于 https://github.com/openclaw/openclaw，感谢 OpenClaw 开源社区。
+- 完整 MIT License 和第三方声明见镜像内 LICENSE.txt 与 THIRD_PARTY_NOTICES.md。
 README
 
 rm -f "$DMG_PATH" "$TMP_DMG"

@@ -149,9 +149,13 @@ struct AppUpdateSettingsRows: View {
     var body: some View {
         SettingsToggleRow(
             title: language.text("自动检查更新", "Check automatically"),
-            detail: language.text("每天最多读取一次 GitHub Release，包含 beta 版本", "Reads GitHub Releases at most once per day, including beta releases")
+            detail: language.text("OpenClaw 定制版已关闭自动更新，避免覆盖本机改动", "Disabled in the OpenClaw custom build to preserve local changes")
         ) {
-            SettingsSwitchToggle(isOn: $settings.automaticUpdateChecksEnabled)
+            SettingsSwitchToggle(
+                isOn: .constant(false),
+                isDisabled: true,
+                help: language.text("定制版不自动更新", "Automatic updates are disabled for this custom build")
+            )
         }
 
         SettingsBaseRow(

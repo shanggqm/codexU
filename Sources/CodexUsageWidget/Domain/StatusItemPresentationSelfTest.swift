@@ -127,7 +127,7 @@ enum StatusItemPresentationSelfTest {
         )
 
         let clampedSource = StatusItemSourceSnapshot(
-            runtime: .claudeCode,
+            runtime: .openClaw,
             fiveHourRemainingPercent: -10,
             fiveHourResetsAt: nil,
             sevenDayRemainingPercent: 110,

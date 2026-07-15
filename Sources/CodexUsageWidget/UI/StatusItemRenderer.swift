@@ -549,8 +549,8 @@ struct StatusItemRenderer {
         switch scope {
         case .codex:
             resourceName = "codex-template"
-        case .claudeCode:
-            resourceName = "claudecode-template"
+        case .openClaw:
+            resourceName = "openclaw-template"
         }
         if let cached = Self.templateCache[resourceName] {
             return cached
@@ -563,7 +563,7 @@ struct StatusItemRenderer {
 
         let fallbackName = scope == .codex
             ? "apple.terminal.fill"
-            : "curlybraces.square.fill"
+            : "pawprint.fill"
         let configuration = NSImage.SymbolConfiguration(pointSize: 18, weight: .medium)
         return NSImage(systemSymbolName: fallbackName, accessibilityDescription: nil)?
             .withSymbolConfiguration(configuration)
