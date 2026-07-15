@@ -13,11 +13,15 @@ final class MultiRuntimeUsageReader {
     }
 
     func load(
+        scopes: [RuntimeScope] = RuntimeScope.allCases,
         statisticsPreference: StatisticsTimeZonePreference = .default,
         generation: UInt64 = 0
     ) -> MultiRuntimeUsageSnapshot {
         let context = RuntimeLoadContext.live(statisticsPreference: statisticsPreference)
-        let runtimeSnapshots = registry.providers.map { provider in
+        let selectedScopes = Set(scopes)
+        let runtimeSnapshots = registry.providers
+            .filter { selectedScopes.contains($0.scope) }
+            .map { provider in
             provider.loadSnapshot(context: context)
         }
         let refreshedAt = Date()

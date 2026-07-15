@@ -176,7 +176,7 @@ struct RuntimeSelector: View {
                             .minimumScaleFactor(0.82)
                     }
                     .foregroundStyle(selected == scope ? .primary : .secondary)
-                    .frame(minWidth: scope == .openClaw ? 104 : 78, minHeight: titlebarControlHeight)
+                    .frame(minWidth: scope == .codex ? 78 : 112, minHeight: titlebarControlHeight)
                     .padding(.horizontal, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -199,12 +199,7 @@ struct RuntimeSelector: View {
     }
 
     private func label(for scope: RuntimeScope) -> String {
-        switch scope {
-        case .codex:
-            return "Codex"
-        case .openClaw:
-            return "OpenClaw"
-        }
+        scope.displayName
     }
 }
 
@@ -572,6 +567,10 @@ struct RuntimeSummaryCard: View {
                     : "本机统计；额度暂不可用"
             case .openClaw:
                 return "本机 OpenClaw 记录"
+            case .claudeCode:
+                return "本机 Claude Code 记录"
+            case .hermes:
+                return "本机 Hermes state.db"
             }
         }
         switch summary.scope {
@@ -582,6 +581,10 @@ struct RuntimeSummaryCard: View {
                 : "Local records; quota unavailable"
         case .openClaw:
             return "Local OpenClaw records"
+        case .claudeCode:
+            return "Local Claude Code records"
+        case .hermes:
+            return "Local Hermes state.db"
         }
     }
 }
@@ -628,6 +631,10 @@ struct RuntimeLogoView: View {
             return "terminal"
         case .openClaw:
             return "pawprint.fill"
+        case .claudeCode:
+            return "sparkles"
+        case .hermes:
+            return "h.circle.fill"
         }
     }
 }
@@ -640,6 +647,10 @@ private enum RuntimeLogo {
             name = "codex-color"
         case .openClaw:
             name = "openclaw-color"
+        case .claudeCode:
+            name = "claudecode-color"
+        case .hermes:
+            name = "hermes-color"
         }
         guard let url = Bundle.main.url(forResource: name, withExtension: "png") else {
             return nil

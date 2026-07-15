@@ -2,13 +2,17 @@
 
 ## Unreleased
 
-- Replaced the Claude Code runtime with local OpenClaw main-agent transcript statistics and local task ingestion.
-- Kept Codex and OpenClaw token totals separate by execution runtime, including Codex runs invoked from OpenClaw in Codex totals.
-- Added Codex/OpenClaw task-source badges and task detail views for summaries and latest replies.
+## 1.1.0 - 2026-07-16
+
+- Kept Codex permanently enabled and added a single companion-Agent selector for OpenClaw, Claude Code, or Hermes.
+- Isolated provider loading so an unselected companion Agent is not scanned or included in aggregate usage.
+- Restored Claude Code local transcript support and added Hermes default-profile `~/.hermes/state.db` support for tokens, sessions, projects, tools, and tasks.
+- Kept token attribution separate by executing runtime; explicit Codex-backed OpenClaw and Hermes records are excluded from companion totals and remain in Codex statistics.
+- Added Codex/OpenClaw/Claude Code/Hermes task-source badges and namespaced task identifiers.
 - Added a validated `codex://threads/<thread-id>` action in Codex task details while keeping task-card clicks in the existing detail mode.
 - Added a lightweight local CPU, physical-memory, and macOS thermal-state monitor; sensor temperature is shown only when a usable local sensor is available.
-- Avoided startup stalls by lazily parsing session timestamps and by never opening Skill files outside the local Codex/OpenClaw Skill roots for static estimates.
-- Disabled automatic upstream update checks for the local OpenClaw custom build.
+- Added parser fixtures, Agent-selection persistence and provider-isolation tests, and release checks for stale screenshots and promotional QR content.
+- Disabled automatic upstream update checks for this customized build.
 
 ## 1.0.5 - 2026-07-14
 

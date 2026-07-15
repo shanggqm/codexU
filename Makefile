@@ -19,6 +19,7 @@ DMG_PATH := $(DIST_DIR)/$(DMG_NAME)
 SIGN_IDENTITY ?= -
 CODESIGN_EXTRA_FLAGS ?=
 SWIFTC_TARGET_FLAGS := -target $(TARGET_TRIPLE)
+SWIFT_OPT_FLAGS ?= -O -whole-module-optimization
 
 ifeq ($(SIGN_IDENTITY),-)
 CODESIGN_FLAGS := --force --deep --sign -
@@ -26,7 +27,7 @@ else
 CODESIGN_FLAGS := --force --deep --options runtime --timestamp --sign "$(SIGN_IDENTITY)" $(CODESIGN_EXTRA_FLAGS)
 endif
 
-.PHONY: build run probe test-rate-limits test-statistics-time-zone test-particle-animation test-task-navigation test-local-system install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
+.PHONY: build run probe test-rate-limits test-statistics-time-zone test-particle-animation test-task-navigation test-local-system test-agent-selection test-parsers install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
 
 build:
 	rm -rf "$(APP_DIR)"
@@ -35,7 +36,7 @@ build:
 	cp "$(APP_ICON)" "$(RESOURCES_DIR)/"
 	cp Resources/*.png "$(RESOURCES_DIR)/"
 	/usr/bin/xattr -dr com.apple.quarantine "$(APP_DIR)" 2>/dev/null || true
-	MACOSX_DEPLOYMENT_TARGET="$(DEPLOYMENT_TARGET)" swiftc -O -parse-as-library $(SWIFTC_TARGET_FLAGS) $(SOURCES) \
+	MACOSX_DEPLOYMENT_TARGET="$(DEPLOYMENT_TARGET)" swiftc $(SWIFT_OPT_FLAGS) -parse-as-library $(SWIFTC_TARGET_FLAGS) $(SOURCES) \
 		-o "$(MACOS_DIR)/$(APP_NAME)" \
 		-framework Cocoa \
 		-framework Carbon \
@@ -63,6 +64,12 @@ test-task-navigation: build
 
 test-local-system: build
 	"$(MACOS_DIR)/$(APP_NAME)" --self-test-local-system
+
+test-agent-selection: build
+	"$(MACOS_DIR)/$(APP_NAME)" --self-test-agent-selection
+
+test-parsers: build
+	CODEXU_SKIP_BUILD=1 ./scripts/test-parsers.sh
 
 install: build
 	rm -rf "/Applications/$(APP_NAME).app"

@@ -531,7 +531,7 @@ struct StatusItemRenderer {
             return
         }
         drawText(
-            scope == .codex ? "C" : "A",
+            String(scope.displayName.prefix(1)),
             in: rect,
             font: .systemFont(ofSize: max(6, rect.height * 0.64), weight: .bold),
             color: primaryTextColor,
@@ -551,6 +551,10 @@ struct StatusItemRenderer {
             resourceName = "codex-template"
         case .openClaw:
             resourceName = "openclaw-template"
+        case .claudeCode:
+            resourceName = "claudecode-template"
+        case .hermes:
+            resourceName = "hermes-template"
         }
         if let cached = Self.templateCache[resourceName] {
             return cached
@@ -561,9 +565,17 @@ struct StatusItemRenderer {
             return image
         }
 
-        let fallbackName = scope == .codex
-            ? "apple.terminal.fill"
-            : "pawprint.fill"
+        let fallbackName: String
+        switch scope {
+        case .codex:
+            fallbackName = "apple.terminal.fill"
+        case .openClaw:
+            fallbackName = "pawprint.fill"
+        case .claudeCode:
+            fallbackName = "sparkles"
+        case .hermes:
+            fallbackName = "h.circle.fill"
+        }
         let configuration = NSImage.SymbolConfiguration(pointSize: 18, weight: .medium)
         return NSImage(systemSymbolName: fallbackName, accessibilityDescription: nil)?
             .withSymbolConfiguration(configuration)

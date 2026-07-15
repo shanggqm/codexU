@@ -149,7 +149,7 @@ struct AppUpdateSettingsRows: View {
     var body: some View {
         SettingsToggleRow(
             title: language.text("自动检查更新", "Check automatically"),
-            detail: language.text("OpenClaw 定制版已关闭自动更新，避免覆盖本机改动", "Disabled in the OpenClaw custom build to preserve local changes")
+            detail: language.text("本机多 Agent 定制版已关闭自动更新，避免覆盖本机改动", "Disabled in this local multi-Agent build to preserve local changes")
         ) {
             SettingsSwitchToggle(
                 isOn: .constant(false),

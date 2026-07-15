@@ -3,19 +3,26 @@ import Foundation
 enum RuntimeScope: String, CaseIterable, Identifiable, Codable, Equatable {
     case codex
     case openClaw
+    case claudeCode
+    case hermes
 
     var id: String { rawValue }
 
     static func storedIdentifier(_ value: String) -> RuntimeScope? {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        // This custom build replaces the former Claude Code slot with OpenClaw.
-        // Migrate an existing v1.0.5 preference so OpenClaw is not hidden after upgrade.
-        if normalized == "claudecode" || normalized == "claude-code" {
-            return .openClaw
-        }
+        if normalized == "claudecode" { return .claudeCode }
+        if normalized == "open-claw" { return .openClaw }
         return allCases.first { scope in
             scope.rawValue.lowercased() == normalized || scope.runtimeId.lowercased() == normalized
         }
+    }
+
+    static var companionCases: [RuntimeScope] {
+        allCases.filter { $0 != .codex }
+    }
+
+    var isCompanionAgent: Bool {
+        self != .codex
     }
 
     var runtimeId: String {
@@ -24,6 +31,10 @@ enum RuntimeScope: String, CaseIterable, Identifiable, Codable, Equatable {
             return "codex"
         case .openClaw:
             return "openclaw"
+        case .claudeCode:
+            return "claude-code"
+        case .hermes:
+            return "hermes"
         }
     }
 
@@ -33,6 +44,10 @@ enum RuntimeScope: String, CaseIterable, Identifiable, Codable, Equatable {
             return "Codex"
         case .openClaw:
             return "OpenClaw"
+        case .claudeCode:
+            return "Claude Code"
+        case .hermes:
+            return "Hermes"
         }
     }
 }
@@ -177,7 +192,7 @@ struct MultiRuntimeUsageSnapshot: Equatable {
     }
 
     func displaySnapshot(for scope: RuntimeScope) -> UsageSnapshot {
-        runtime(for: scope)?.snapshot ?? runtimes.first?.snapshot ?? aggregate
+        runtime(for: scope)?.snapshot ?? .empty
     }
 
     func defaultScope(preferred: RuntimeScope, allowedScopes: [RuntimeScope] = RuntimeScope.allCases) -> RuntimeScope {

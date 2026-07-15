@@ -38,7 +38,9 @@ struct RuntimeProviderRegistry {
     init(providers: [any RuntimeUsageProvider]? = nil) {
         let baseProviders = providers ?? [
             CodexRuntimeProvider(),
-            OpenClawRuntimeProvider()
+            OpenClawRuntimeProvider(),
+            ClaudeCodeRuntimeProvider(),
+            HermesRuntimeProvider()
         ]
         let filters = ProcessInfo.processInfo.environment["CODEXU_RUNTIME_FILTER"]?
             .split(separator: ",")

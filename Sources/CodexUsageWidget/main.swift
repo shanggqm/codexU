@@ -564,7 +564,7 @@ final class UsageStore: ObservableObject {
     @Published var multiRuntimeSnapshot: MultiRuntimeUsageSnapshot = .empty
     @Published var runtimeSnapshots: [RuntimeUsageSnapshot] = []
     @Published var selectedRuntimeScope: RuntimeScope = .codex
-    @Published var visibleRuntimeScopes: [RuntimeScope] = RuntimeScope.allCases
+    @Published var visibleRuntimeScopes: [RuntimeScope] = [.codex, .openClaw]
     @Published var isRefreshing = false
     @Published private(set) var statisticsPreference = StatisticsTimeZonePreferenceStore.load()
     @Published private(set) var statisticsTransitionMessage: String?
@@ -672,10 +672,12 @@ final class UsageStore: ObservableObject {
         refreshGeneration &+= 1
         let generation = refreshGeneration
         let preference = statisticsPreference
+        let scopes = visibleRuntimeScopes
         isRefreshing = true
 
         DispatchQueue.global(qos: .utility).async {
             let multiSnapshot = MultiRuntimeUsageReader().load(
+                scopes: scopes,
                 statisticsPreference: preference,
                 generation: generation
             )
@@ -732,7 +734,9 @@ final class UsageStore: ObservableObject {
     }
 
     private func statisticsCacheKey(for preference: StatisticsTimeZonePreference) -> String {
-        StatisticsContext(preference: preference, now: Date()).resolvedIdentifier
+        let timeZone = StatisticsContext(preference: preference, now: Date()).resolvedIdentifier
+        let runtimes = visibleRuntimeScopes.map(\.runtimeId).joined(separator: ",")
+        return "\(timeZone)|\(runtimes)"
     }
 
     private func validCachedStatisticsSnapshot(forKey key: String) -> MultiRuntimeUsageSnapshot? {
@@ -748,7 +752,7 @@ final class UsageStore: ObservableObject {
     }
 
     private func cacheStatisticsSnapshot(_ snapshot: MultiRuntimeUsageSnapshot) {
-        let key = snapshot.statisticsIdentity.resolvedIdentifier
+        let key = statisticsCacheKey(for: snapshot.statisticsIdentity.preference)
         statisticsSnapshotCache[key] = StatisticsSnapshotCacheEntry(snapshot: snapshot, cachedAt: Date())
         statisticsSnapshotCacheOrder.removeAll { $0 == key }
         statisticsSnapshotCacheOrder.append(key)
@@ -798,9 +802,17 @@ final class UsageStore: ObservableObject {
     }
 
     func updateVisibleRuntimeScopes(_ scopes: [RuntimeScope]) {
-        visibleRuntimeScopes = scopes.isEmpty ? RuntimeScope.allCases : scopes
+        let normalized = scopes.isEmpty ? [.codex, .openClaw] : scopes
+        guard normalized != visibleRuntimeScopes else { return }
+        refreshGeneration &+= 1
+        visibleRuntimeScopes = normalized
+        statisticsSnapshotCache.removeAll()
+        statisticsSnapshotCacheOrder.removeAll()
         if !visibleRuntimeScopes.contains(selectedRuntimeScope) {
             selectRuntime(visibleRuntimeScopes.first ?? selectedRuntimeScope)
+        }
+        if hasStarted {
+            refresh(queueIfBusy: true)
         }
     }
 
@@ -2355,7 +2367,7 @@ final class CodexUsageReader {
             messages.append("任务看板未找到 SQLite 数据源")
         }
 
-        let scheduledItems = readAutomationTasks()
+        let scheduledItems = readAutomationTasks(homeDirectory: context.homeDirectory)
 
         return TaskBoard(refreshedAt: Date(), columns: [
             TaskColumn(id: .active, title: "进行中", count: activeItems.count, items: activeItems),
@@ -2397,7 +2409,7 @@ final class CodexUsageReader {
         let recentReply = lastCodexAssistantReply(at: object["rolloutPath"] as? String)
 
         return TaskItem(
-            id: rawId + kind.rawValue,
+            id: "codex:\(rawId):\(kind.rawValue)",
             code: String(code),
             title: title,
             detail: detailParts.joined(separator: " · "),
@@ -2444,8 +2456,8 @@ final class CodexUsageReader {
         return nil
     }
 
-    private func readAutomationTasks() -> [TaskItem] {
-        let root = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".codex/automations")
+    private func readAutomationTasks(homeDirectory: URL) -> [TaskItem] {
+        let root = homeDirectory.appendingPathComponent(".codex/automations")
         guard let enumerator = fileManager.enumerator(at: root, includingPropertiesForKeys: nil) else {
             return []
         }
@@ -2463,7 +2475,7 @@ final class CodexUsageReader {
             let detail = [kind.uppercased(), schedule].filter { !$0.isEmpty }.joined(separator: " · ")
 
             items.append(TaskItem(
-                id: "automation-" + id,
+                id: "codex:automation:" + id,
                 code: "AUTO-" + id.prefix(4).uppercased(),
                 title: name,
                 detail: detail,
@@ -3107,7 +3119,8 @@ final class AppSettings: ObservableObject {
     private static let keepMainWindowOnTopKey = "codexU.keepMainWindowOnTop"
     private static let keepRunningWhenMainWindowClosedKey = "codexU.keepRunningWhenMainWindowClosed"
     private static let visibleRuntimeScopesKey = "codexU.visibleRuntimeScopes"
-    private static let openClawCustomMigrationKey = "codexU.openClawCustomMigrationV1"
+    private static let selectedAgentRuntimeKey = "codexU.selectedAgentRuntime.v1"
+    private static let multiAgentSelectionMigrationKey = "codexU.multiAgentSelectionMigrationV1"
     private static let automaticUpdateChecksEnabledKey = "codexU.update.autoCheckEnabled"
     private static let skippedUpdateVersionKey = "codexU.update.skippedVersion"
 
@@ -3160,6 +3173,14 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    @Published private(set) var selectedAgentRuntime: RuntimeScope {
+        didSet {
+            defaults.set(selectedAgentRuntime.runtimeId, forKey: Self.selectedAgentRuntimeKey)
+            visibleRuntimeScopes = [.codex, selectedAgentRuntime]
+            defaults.set(visibleRuntimeScopes.map(\.runtimeId), forKey: Self.visibleRuntimeScopesKey)
+        }
+    }
+
     @Published private(set) var visibleRuntimeScopes: [RuntimeScope] {
         didSet {
             defaults.set(visibleRuntimeScopes.map(\.runtimeId), forKey: Self.visibleRuntimeScopesKey)
@@ -3183,15 +3204,23 @@ final class AppSettings: ObservableObject {
         } else {
             keepRunningWhenMainWindowClosed = defaults.bool(forKey: Self.keepRunningWhenMainWindowClosedKey)
         }
-        // Local OpenClaw customizations must not be overwritten by an upstream DMG.
+        // Local multi-Agent customizations must not be overwritten by an upstream DMG.
         automaticUpdateChecksEnabled = false
         defaults.set(false, forKey: Self.automaticUpdateChecksEnabledKey)
         skippedUpdateVersion = defaults.string(forKey: Self.skippedUpdateVersionKey)
-        // The upstream app and this custom build share preferences. Always repair
-        // the runtime list so an older process cannot leave OpenClaw hidden.
-        visibleRuntimeScopes = RuntimeScope.allCases
-        defaults.set(RuntimeScope.allCases.map(\.runtimeId), forKey: Self.visibleRuntimeScopesKey)
-        defaults.set(true, forKey: Self.openClawCustomMigrationKey)
+        let storedAgent = defaults.string(forKey: Self.selectedAgentRuntimeKey)
+            .flatMap(RuntimeScope.storedIdentifier)
+        let legacyAgent = (defaults.array(forKey: Self.visibleRuntimeScopesKey) as? [String])?
+            .compactMap(RuntimeScope.storedIdentifier)
+            .first(where: \.isCompanionAgent)
+        let initialAgent = storedAgent?.isCompanionAgent == true
+            ? storedAgent!
+            : (legacyAgent ?? .openClaw)
+        selectedAgentRuntime = initialAgent
+        visibleRuntimeScopes = [.codex, initialAgent]
+        defaults.set(initialAgent.runtimeId, forKey: Self.selectedAgentRuntimeKey)
+        defaults.set([RuntimeScope.codex.runtimeId, initialAgent.runtimeId], forKey: Self.visibleRuntimeScopesKey)
+        defaults.set(true, forKey: Self.multiAgentSelectionMigrationKey)
         statusItemPreferences = StatusItemPreferencesStore.load(defaults: defaults)
         let storedShortcut = GlobalShortcut.load(defaults: defaults)
         if let storedShortcut, storedShortcut.validationError != nil {
@@ -3203,34 +3232,11 @@ final class AppSettings: ObservableObject {
         globalShortcutError = nil
     }
 
-    func isRuntimeVisible(_ scope: RuntimeScope) -> Bool {
-        visibleRuntimeScopes.contains(scope)
-    }
-
     @discardableResult
-    func setRuntime(_ scope: RuntimeScope, visible: Bool) -> Bool {
-        if visible {
-            visibleRuntimeScopes = Self.orderedRuntimeScopes(Set(visibleRuntimeScopes + [scope]))
-            return true
-        }
-        guard visibleRuntimeScopes.count > 1 else {
-            return false
-        }
-        visibleRuntimeScopes = visibleRuntimeScopes.filter { $0 != scope }
+    func selectAgentRuntime(_ scope: RuntimeScope) -> Bool {
+        guard scope.isCompanionAgent else { return false }
+        selectedAgentRuntime = scope
         return true
-    }
-
-    private static func storedVisibleRuntimeScopes(defaults: UserDefaults) -> [RuntimeScope] {
-        guard let identifiers = defaults.array(forKey: visibleRuntimeScopesKey) as? [String] else {
-            return RuntimeScope.allCases
-        }
-        let scopes = identifiers.compactMap(RuntimeScope.storedIdentifier)
-        let ordered = orderedRuntimeScopes(Set(scopes))
-        return ordered.isEmpty ? RuntimeScope.allCases : ordered
-    }
-
-    private static func orderedRuntimeScopes(_ scopes: Set<RuntimeScope>) -> [RuntimeScope] {
-        RuntimeScope.allCases.filter { scopes.contains($0) }
     }
 
     @discardableResult
@@ -3482,8 +3488,8 @@ struct UsageWidgetView: View {
 
     private var usageOverviewSection: some View {
         HStack(alignment: .center, spacing: 26) {
-            if store.selectedRuntimeScope == .openClaw {
-                OpenClawLocalOverviewCard(language: language)
+            if store.selectedRuntimeScope.isCompanionAgent {
+                LocalAgentOverviewCard(scope: store.selectedRuntimeScope, language: language)
                     .frame(width: 154, height: 179)
             } else {
                 VStack(spacing: 8) {
@@ -3535,8 +3541,8 @@ struct UsageWidgetView: View {
                     )
                 }
 
-                if store.selectedRuntimeScope == .openClaw {
-                    RuntimeAttributionCard(language: language)
+                if store.selectedRuntimeScope.isCompanionAgent {
+                    RuntimeAttributionCard(scope: store.selectedRuntimeScope, language: language)
                 } else {
                     WoolProgressCard(usage: snapshot.local?.detailedUsage?.month, language: language)
                 }
@@ -3655,8 +3661,8 @@ struct UsageWidgetView: View {
 
     private var shouldShowEnvironmentChecklist: Bool {
         if snapshot.messages.contains("正在读取 codexU 数据") { return false }
-        if store.selectedRuntimeScope == .openClaw {
-            return snapshot.local == nil
+        if store.selectedRuntimeScope.isCompanionAgent {
+            return snapshot.local == nil || snapshot.local?.detailedUsage == nil
         }
         let quotaUnavailable = snapshot.fiveHourQuota == nil && snapshot.sevenDayQuota == nil
         let hasQuotaProtocolWarning = snapshot.messages.contains { $0.contains("额度窗口") }
@@ -3669,12 +3675,13 @@ struct UsageWidgetView: View {
         var items: [DiagnosticItem] = []
         let messages = snapshot.messages.joined(separator: "\n")
 
-        if store.selectedRuntimeScope == .openClaw {
+        if store.selectedRuntimeScope.isCompanionAgent {
+            let runtime = store.selectedRuntimeScope
             if snapshot.local == nil || snapshot.local?.detailedUsage == nil {
                 items.append(DiagnosticItem(
-                    id: "openclaw-local-usage",
-                    title: language.text("暂无 OpenClaw 本机用量记录", "No local OpenClaw usage records yet"),
-                    detail: language.text("本机 token 统计来自 ~/.openclaw/agents/main/sessions，只读取 usage、模型和工具名称等结构化字段。", "Local token stats come from ~/.openclaw/agents/main/sessions and only read structured usage, model, and tool-name fields."),
+                    id: "\(runtime.runtimeId)-local-usage",
+                    title: language.text("暂无 \(runtime.displayName) 本机用量记录", "No local \(runtime.displayName) usage records yet"),
+                    detail: companionRuntimeDiagnosticDetail(runtime),
                     systemName: "doc.text.magnifyingglass",
                     tint: WidgetPalette.statusInfo
                 ))
@@ -3683,7 +3690,7 @@ struct UsageWidgetView: View {
             if items.isEmpty {
                 items = snapshot.messages.prefix(3).enumerated().map { index, message in
                     DiagnosticItem(
-                        id: "openclaw-message-\(index)",
+                        id: "\(runtime.runtimeId)-message-\(index)",
                         title: language.text("运行提示", "Runtime note"),
                         detail: localizedReaderMessage(message, language: language),
                         systemName: "info.circle.fill",
@@ -3764,6 +3771,28 @@ struct UsageWidgetView: View {
         }
 
         return items
+    }
+
+    private func companionRuntimeDiagnosticDetail(_ scope: RuntimeScope) -> String {
+        switch scope {
+        case .codex:
+            return language.text("本机统计来自 ~/.codex。", "Local stats come from ~/.codex.")
+        case .openClaw:
+            return language.text(
+                "来自 ~/.openclaw/agents/main/sessions，只读取 usage、模型和工具名称等结构化字段，不读取 NAS。",
+                "Reads structured usage, model, and tool-name fields from ~/.openclaw/agents/main/sessions; NAS is excluded."
+            )
+        case .claudeCode:
+            return language.text(
+                "来自 ~/.claude/projects 的本机会话记录；未选中 Claude Code 时不会扫描该目录。",
+                "Reads local sessions under ~/.claude/projects; the directory is not scanned when Claude Code is not selected."
+            )
+        case .hermes:
+            return language.text(
+                "来自 ~/.hermes/state.db 的默认 profile，只读取 token、会话、模型和工具等结构化字段。",
+                "Reads structured token, session, model, and tool fields from the default profile at ~/.hermes/state.db."
+            )
+        }
     }
 }
 
@@ -4015,25 +4044,19 @@ struct SettingsPanelView: View {
 
                 settingsSection(
                     title: "Runtime",
-                    detail: language.text("展示范围", "Display")
+                    detail: language.text("Agent 接入", "Agent integration")
                 ) {
                     SettingsPickerRow(
-                        title: language.text("展示 Runtime", "Visible runtimes"),
-                        detail: language.text("主窗口和菜单栏浮窗中的 Runtime 范围", "Runtime scope in the main window and menu popover")
+                        title: language.text("第二 Agent", "Companion agent"),
+                        detail: language.text("Codex 始终保留；选择一个本机 Agent", "Codex stays enabled; choose one local agent")
                     ) {
-                        SettingsRuntimeMultiSelectControl(
-                            selectedScopes: settings.visibleRuntimeScopes,
+                        SettingsAgentPickerControl(
+                            selectedScope: settings.selectedAgentRuntime,
                             language: language
                         ) { scope in
-                            settings.setRuntime(scope, visible: !settings.isRuntimeVisible(scope))
+                            settings.selectAgentRuntime(scope)
                         }
                         .help(runtimeSelectionHelp)
-                        .accessibilityLabel(language.text("展示 Runtime", "Visible runtimes"))
-                        .accessibilityValue(
-                            settings.visibleRuntimeScopes
-                                .map(\.displayName)
-                                .joined(separator: ", ")
-                        )
                     }
                 }
 
@@ -4245,8 +4268,8 @@ struct SettingsPanelView: View {
 
     private var runtimeSelectionHelp: String {
         language.text(
-            "点击切换展示范围；至少需要保留一个 Runtime",
-            "Click to change visibility; at least one runtime must stay visible"
+            "Codex 固定显示；未选中的 Agent 不会读取本机数据",
+            "Codex stays visible; unselected agents are not read"
         )
     }
 }
@@ -4326,24 +4349,24 @@ struct SettingsSegmentedControl<Value: Hashable>: View {
     }
 }
 
-struct SettingsRuntimeMultiSelectControl: View {
+struct SettingsAgentPickerControl: View {
     @Environment(\.colorScheme) private var colorScheme
-    let selectedScopes: [RuntimeScope]
+    let selectedScope: RuntimeScope
     let language: WidgetLanguage
-    let onToggle: (RuntimeScope) -> Void
+    let onSelect: (RuntimeScope) -> Void
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(Array(RuntimeScope.allCases.enumerated()), id: \.element.id) { index, scope in
+            ForEach(Array(RuntimeScope.companionCases.enumerated()), id: \.element.id) { index, scope in
                 Button {
-                    onToggle(scope)
+                    onSelect(scope)
                 } label: {
-                    HStack(spacing: 6) {
-                        RuntimeLogoView(scope: scope, size: 16)
+                    HStack(spacing: 4) {
+                        RuntimeLogoView(scope: scope, size: 14)
                         Text(label(for: scope))
-                            .font(.system(size: 12, weight: isSelected(scope) ? .semibold : .medium))
+                            .font(.system(size: 11, weight: isSelected(scope) ? .semibold : .medium))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.82)
+                            .minimumScaleFactor(0.76)
                     }
                     .foregroundStyle(isSelected(scope) ? Color.white : Color.secondary)
                     .frame(maxWidth: .infinity, minHeight: settingsSegmentHeight)
@@ -4354,10 +4377,10 @@ struct SettingsRuntimeMultiSelectControl: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(label(for: scope))
+                .accessibilityLabel(scope.displayName)
                 .accessibilityValue(isSelected(scope) ? language.text("已选择", "Selected") : language.text("未选择", "Not selected"))
 
-                if index < RuntimeScope.allCases.count - 1 {
+                if index < RuntimeScope.companionCases.count - 1 {
                     Rectangle()
                         .fill(WidgetPalette.controlStroke(colorScheme))
                         .frame(width: 1, height: 16)
@@ -4379,16 +4402,11 @@ struct SettingsRuntimeMultiSelectControl: View {
     }
 
     private func isSelected(_ scope: RuntimeScope) -> Bool {
-        selectedScopes.contains(scope)
+        selectedScope == scope
     }
 
     private func label(for scope: RuntimeScope) -> String {
-        switch scope {
-        case .codex:
-            return "Codex"
-        case .openClaw:
-            return "OpenClaw"
-        }
+        scope == .claudeCode ? "Claude" : scope.displayName
     }
 }
 
@@ -6400,16 +6418,17 @@ private let quotaValueWeightedPricePerMillion =
 private let quotaValueMonthlyTokenLimit = quotaValueDailyTokenLimit * quotaValueBillingDays
 private let quotaValueMonthlyMaxUSD = quotaValueMonthlyTokenLimit / 1_000_000 * quotaValueWeightedPricePerMillion
 
-struct OpenClawLocalOverviewCard: View {
+struct LocalAgentOverviewCard: View {
+    let scope: RuntimeScope
     let language: WidgetLanguage
 
     var body: some View {
         VStack(spacing: 9) {
-            RuntimeLogoView(scope: .openClaw, size: 62)
+            RuntimeLogoView(scope: scope, size: 62)
                 .accessibilityHidden(true)
-            Text("OpenClaw")
+            Text(scope.displayName)
                 .font(.system(size: 16, weight: .bold, design: .rounded))
-            Text(language.text("本机 main agent", "Local main agent"))
+            Text(subtitle)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
             HStack(spacing: 5) {
@@ -6420,7 +6439,7 @@ struct OpenClawLocalOverviewCard: View {
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
-            Text(language.text("不读取 NAS", "NAS excluded"))
+            Text(storageNote)
                 .font(.system(size: 8.5, weight: .medium))
                 .foregroundStyle(.tertiary)
         }
@@ -6428,9 +6447,36 @@ struct OpenClawLocalOverviewCard: View {
         .padding(12)
         .cardBackground(cornerRadius: dashboardCardCornerRadius)
     }
+
+    private var subtitle: String {
+        switch scope {
+        case .codex:
+            return language.text("本机 Codex", "Local Codex")
+        case .openClaw:
+            return language.text("本机 main agent", "Local main agent")
+        case .claudeCode:
+            return language.text("本机会话", "Local sessions")
+        case .hermes:
+            return language.text("本机默认 profile", "Local default profile")
+        }
+    }
+
+    private var storageNote: String {
+        switch scope {
+        case .codex:
+            return language.text("本机记录", "Local records")
+        case .openClaw:
+            return language.text("不读取 NAS", "NAS excluded")
+        case .claudeCode:
+            return "~/.claude"
+        case .hermes:
+            return "~/.hermes/state.db"
+        }
+    }
 }
 
 struct RuntimeAttributionCard: View {
+    let scope: RuntimeScope
     let language: WidgetLanguage
 
     var body: some View {
@@ -6448,14 +6494,21 @@ struct RuntimeAttributionCard: View {
             }
 
             HStack(spacing: 8) {
-                attributionPill(
-                    scope: .openClaw,
-                    text: language.text("main agent → OpenClaw", "main agent → OpenClaw")
-                )
-                attributionPill(
-                    scope: .codex,
-                    text: language.text("Codex 子代理 → Codex", "Codex subagent → Codex")
-                )
+                if scope == .openClaw {
+                    attributionPill(
+                        scope: .openClaw,
+                        text: language.text("main agent → OpenClaw", "main agent → OpenClaw")
+                    )
+                    attributionPill(
+                        scope: .codex,
+                        text: language.text("Codex 子代理 → Codex", "Codex subagent → Codex")
+                    )
+                } else {
+                    attributionPill(
+                        scope: scope,
+                        text: language.text("本机会话 → \(scope.displayName)", "Local sessions → \(scope.displayName)")
+                    )
+                }
                 Spacer(minLength: 0)
             }
         }
@@ -6860,7 +6913,10 @@ struct UsageTrendPanel: View {
             AnalyticsEmptyState(
                 systemName: "chart.bar.doc.horizontal",
                 title: language.text("暂无用量趋势", "No usage trend"),
-                detail: language.text("完成一次 Codex 会话后，这里会显示最近半年的每日 token 热力图。", "After one Codex session, this panel shows a daily token heatmap for the last six months.")
+                detail: language.text(
+                    "完成一次 \(runtimeScope.displayName) 会话后，这里会显示最近半年的每日 token 热力图。",
+                    "After one \(runtimeScope.displayName) session, this panel shows a daily token heatmap for the last six months."
+                )
             )
         }
     }
@@ -6903,7 +6959,7 @@ struct UsageHeatmapCard: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(.top, 4)
-                .help(usageSourceHelp(language: language))
+                .help(usageSourceHelp(runtimeScope: runtimeScope, language: language))
             }
         }
     }
@@ -8651,11 +8707,29 @@ private func usageSourceTooltip(_ quality: UsageSourceQuality, language: WidgetL
     }
 }
 
-private func usageSourceHelp(language: WidgetLanguage) -> String {
-    language.text(
-        "使用本机 Codex session token_count 事件估算；缺失时回退到本机线程更新时间统计。API 等效价值为估算，不代表官方账单。",
-        "Estimated from local Codex session token_count events. Falls back to thread updated_at when detailed events are unavailable. API-equivalent value is an estimate, not an official bill."
-    )
+private func usageSourceHelp(runtimeScope: RuntimeScope, language: WidgetLanguage) -> String {
+    switch runtimeScope {
+    case .codex:
+        return language.text(
+            "使用本机 Codex session token_count 事件估算；缺失时回退到本机线程更新时间统计。API 等效价值为估算，不代表官方账单。",
+            "Estimated from local Codex session token_count events. Falls back to thread updated_at when detailed events are unavailable. API-equivalent value is an estimate, not an official bill."
+        )
+    case .openClaw:
+        return language.text(
+            "使用本机 OpenClaw main-agent transcript 的 assistant message.usage；明确的 Codex-backed 记录会排除。",
+            "Uses assistant message.usage from local OpenClaw main-agent transcripts; explicit Codex-backed records are excluded."
+        )
+    case .claudeCode:
+        return language.text(
+            "使用本机 Claude Code transcript usage 事件；未选中 Claude Code 时不会扫描 ~/.claude。",
+            "Uses local Claude Code transcript usage events; ~/.claude is not scanned when Claude Code is not selected."
+        )
+    case .hermes:
+        return language.text(
+            "使用 Hermes 默认 profile state.db 的 session token 汇总；自然日趋势按最后活跃时间近似归桶。",
+            "Uses session token totals from the Hermes default-profile state.db; calendar-day trends are approximated from last activity time."
+        )
+    }
 }
 
 private func fullDateText(_ date: Date, language: WidgetLanguage) -> String {
@@ -8887,6 +8961,21 @@ private func localizedReaderMessage(_ message: String, language: WidgetLanguage)
     if message.contains("未找到 Codex session 日志") { return "Codex session logs not found" }
     if message.contains("未找到 Codex token_count 事件") { return "Codex token_count events not found" }
     if message.contains("任务看板未找到 SQLite 数据源") { return "Task board SQLite data source not found" }
+    if message.contains("未找到 ~/.openclaw") { return "OpenClaw local session directory not found" }
+    if message.contains("OpenClaw transcript 中未找到 usage 事件") { return "No usage events found in OpenClaw transcripts" }
+    if message.contains("未找到 ~/.claude/projects") { return "Claude Code local projects directory not found" }
+    if message.contains("未找到 Claude Code transcript JSONL") { return "No Claude Code transcript files found" }
+    if message.contains("暂无 Claude Code 本机用量记录") { return "No local Claude Code usage records yet" }
+    if message.contains("未找到 ~/.hermes/state.db") { return "Hermes default-profile state.db not found" }
+    if message.contains("Hermes state.db sessions schema 不受支持") { return "Unsupported Hermes sessions schema" }
+    if message.contains("Hermes state.db 暂无会话记录") { return "No Hermes sessions found in state.db" }
+    if message.contains("暂无 Hermes 默认 profile 本机用量记录") { return "No local Hermes default-profile usage records yet" }
+    if message.contains("Hermes 中 Codex-backed 会话已从 Hermes token 统计排除") {
+        return "Codex-backed Hermes sessions were excluded from Hermes token totals"
+    }
+    if message.contains("Hermes 自然日趋势按会话最后活跃时间近似归桶") {
+        return "Hermes calendar-day trends are approximated from each session's last activity time"
+    }
     if message.contains("额度响应缺少窗口字段") {
         return "Codex quota response is missing window fields, so it was not treated as having no active limits"
     }
@@ -9286,6 +9375,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         store.updateVisibleRuntimeScopes(settings.visibleRuntimeScopes)
         store.start()
         updateStore.startAutomaticCheck()
+        if CommandLine.arguments.contains("--show-status-popover") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.toggleStatusPopover()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                    self?.statusPopover?.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
+                    self?.window?.orderOut(nil)
+                }
+            }
+        }
     }
 
     private func createMainWindow() {
@@ -9624,7 +9722,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         guard let button = statusItem?.button else { return }
         store.refreshIfStale(maximumAge: 5 * 60)
         let popover = NSPopover()
-        popover.behavior = .transient
+        popover.behavior = CommandLine.arguments.contains("--show-status-popover")
+            ? .applicationDefined
+            : .transient
         popover.animates = true
         popover.contentSize = CGSize(
             width: 380,
@@ -10000,6 +10100,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-local-system") {
             exit(LocalSystemMonitorSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-agent-selection") {
+            exit(AgentSelectionSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--dump-json") {

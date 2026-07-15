@@ -15,13 +15,16 @@ fi
 plutil -lint Resources/Info.plist
 git diff --check
 
-make build >/dev/null
+make build SWIFT_OPT_FLAGS=-Onone >/dev/null
 build/codexU.app/Contents/MacOS/codexU --self-test-statistics-time-zone
 build/codexU.app/Contents/MacOS/codexU --self-test-status-item
 build/codexU.app/Contents/MacOS/codexU --self-test-rate-limits
 build/codexU.app/Contents/MacOS/codexU --self-test-particle-animation
 build/codexU.app/Contents/MacOS/codexU --self-test-updates
-./scripts/test-parsers.sh
+build/codexU.app/Contents/MacOS/codexU --self-test-task-navigation
+build/codexU.app/Contents/MacOS/codexU --self-test-local-system
+build/codexU.app/Contents/MacOS/codexU --self-test-agent-selection
+CODEXU_SKIP_BUILD=1 ./scripts/test-parsers.sh
 
 make release-all
 
@@ -41,6 +44,14 @@ verify_asset() {
   hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "$dmg" >/dev/null
   file "$mount_dir/codexU.app/Contents/MacOS/codexU" | grep -q "$expected_arch"
   codesign --verify --deep --strict "$mount_dir/codexU.app"
+  if [[ "$arch" == "arm64" ]]; then
+    "$mount_dir/codexU.app/Contents/MacOS/codexU" --self-test-agent-selection
+    "$mount_dir/codexU.app/Contents/MacOS/codexU" --self-test-task-navigation
+    "$mount_dir/codexU.app/Contents/MacOS/codexU" --self-test-local-system
+    CODEXU_SKIP_BUILD=1 \
+    CODEXU_APP_EXECUTABLE="$mount_dir/codexU.app/Contents/MacOS/codexU" \
+      ./scripts/test-parsers.sh
+  fi
   hdiutil detach "$mount_dir" >/dev/null
   rmdir "$mount_dir"
 }

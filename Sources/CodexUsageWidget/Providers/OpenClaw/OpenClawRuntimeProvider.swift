@@ -199,7 +199,16 @@ private final class OpenClawTranscriptReader {
         guard !tokens.isZero else { return }
 
         let model = (message["model"] as? String) ?? summary.model
+        let provider = (message["provider"] as? String) ?? ""
+        let normalizedProvider = provider.lowercased()
+        let normalizedModel = (model ?? "").lowercased()
+        let isCodexBacked = normalizedProvider == "codex"
+            || normalizedProvider == "openai-codex"
+            || normalizedProvider.hasPrefix("codex-")
+            || normalizedModel.hasPrefix("codex/")
+            || normalizedModel.contains("openai-codex")
         summary.model = model
+        guard !isCodexBacked else { return }
         summary.deltas.append(OpenClawUsageDelta(
             messageId: messageId,
             date: timestamp ?? summary.lastActiveAt ?? Date(),
