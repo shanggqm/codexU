@@ -24,6 +24,7 @@ build/codexU.app/Contents/MacOS/codexU --self-test-updates
 build/codexU.app/Contents/MacOS/codexU --self-test-task-navigation
 build/codexU.app/Contents/MacOS/codexU --self-test-local-system
 build/codexU.app/Contents/MacOS/codexU --self-test-agent-selection
+build/codexU.app/Contents/MacOS/codexU --self-test-codex-token-events
 CODEXU_SKIP_BUILD=1 ./scripts/test-parsers.sh
 
 make release-all
@@ -48,6 +49,7 @@ verify_asset() {
     "$mount_dir/codexU.app/Contents/MacOS/codexU" --self-test-agent-selection
     "$mount_dir/codexU.app/Contents/MacOS/codexU" --self-test-task-navigation
     "$mount_dir/codexU.app/Contents/MacOS/codexU" --self-test-local-system
+    "$mount_dir/codexU.app/Contents/MacOS/codexU" --self-test-codex-token-events
     CODEXU_SKIP_BUILD=1 \
     CODEXU_APP_EXECUTABLE="$mount_dir/codexU.app/Contents/MacOS/codexU" \
       ./scripts/test-parsers.sh

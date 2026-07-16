@@ -12,6 +12,58 @@ fi
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+CODEX_HOME="$TMP_DIR/codex-home"
+CODEX_CACHE="$TMP_DIR/codex-cache"
+CODEX_ROLLOUT="$CODEX_HOME/.codex/sessions/2026/07/16/rollout-fixture.jsonl"
+mkdir -p "$(dirname "$CODEX_ROLLOUT")" "$CODEX_CACHE"
+cp tests/fixtures/codex-session-nonmonotonic.jsonl "$CODEX_ROLLOUT"
+
+sqlite3 "$CODEX_HOME/.codex/state_5.sqlite" <<SQL
+CREATE TABLE threads (
+  id TEXT PRIMARY KEY,
+  rollout_path TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  cwd TEXT NOT NULL,
+  title TEXT NOT NULL,
+  tokens_used INTEGER NOT NULL DEFAULT 0,
+  archived INTEGER NOT NULL DEFAULT 0,
+  archived_at INTEGER,
+  first_user_message TEXT NOT NULL DEFAULT '',
+  preview TEXT NOT NULL DEFAULT '',
+  recency_at INTEGER NOT NULL DEFAULT 0,
+  model TEXT
+);
+INSERT INTO threads VALUES (
+  '00000000-0000-4000-8000-000000000001',
+  '$CODEX_ROLLOUT',
+  1784163600,
+  1784163720,
+  '/tmp/codex-fixture',
+  'Codex token regression fixture',
+  1630,
+  0,
+  NULL,
+  '',
+  '',
+  1784163720,
+  'gpt-5.6'
+);
+SQL
+
+CODEX_OUTPUT="$TMP_DIR/out-codex.json"
+CODEXU_HOME_OVERRIDE="$CODEX_HOME" \
+CODEXU_CACHE_OVERRIDE="$CODEX_CACHE" \
+CODEXU_RUNTIME_FILTER="codex" \
+  "$APP_EXECUTABLE" --dump-json > "$CODEX_OUTPUT"
+
+CODEX_DETAILED_TOTAL="$(
+  jq -r '.runtimes[] | select(.scope == "codex") | .snapshot.local.detailedUsage.lifetime.tokens.visibleTotalTokens' \
+    "$CODEX_OUTPUT"
+)"
+test "$CODEX_DETAILED_TOTAL" = "1630"
+grep -q '"tokenEventCount" : 3' "$CODEX_OUTPUT"
+
 SESSIONS_DIR="$TMP_DIR/.openclaw/agents/main/sessions"
 TASKS_DIR="$TMP_DIR/.openclaw/workspace/memory"
 CACHE_DIR="$TMP_DIR/cache"
@@ -147,4 +199,4 @@ if grep -q '"visibleTotalTokens" : 19998' "$HERMES_OUTPUT"; then
   exit 1
 fi
 
-echo "OpenClaw, Claude Code, and Hermes parser fixture checks passed"
+echo "Codex, OpenClaw, Claude Code, and Hermes parser fixture checks passed"

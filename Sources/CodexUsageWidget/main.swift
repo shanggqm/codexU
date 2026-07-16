@@ -972,8 +972,8 @@ final class UsageStore: ObservableObject {
 
 final class CodexUsageReader {
     private let fileManager = FileManager.default
-    private let localAnalyticsCacheVersion = 8
-    private let sessionUsageCacheVersion = 4
+    private let localAnalyticsCacheVersion = 9
+    private let sessionUsageCacheVersion = 5
     private static let sessionUsageCacheLimit = 1_024
     private static let persistentSessionUsageCacheWriteInterval: TimeInterval = 15 * 60
     private static var sessionUsageCache: [String: SessionUsageCacheEntry] = [:]
@@ -2278,23 +2278,16 @@ final class CodexUsageReader {
 
         guard payloadType == "token_count",
               let timestamp = object["timestamp"] as? String,
-              let info = payload["info"] as? [String: Any],
-              let totalUsage = info["total_token_usage"] as? [String: Any]
+              let info = payload["info"] as? [String: Any]
         else { return }
 
-        let current = TokenBreakdown(
-            inputTokens: int64Value(totalUsage["input_tokens"]) ?? 0,
-            cachedInputTokens: int64Value(totalUsage["cached_input_tokens"]) ?? 0,
-            outputTokens: int64Value(totalUsage["output_tokens"]) ?? 0,
-            reasoningOutputTokens: int64Value(totalUsage["reasoning_output_tokens"]) ?? 0,
-            totalTokens: int64Value(totalUsage["total_tokens"]) ?? 0
-        )
-
-        var delta = current.delta(from: previous)
-        if delta.hasNegativeValue {
-            delta = current
-        }
-        previous = current
+        let totalUsage = (info["total_token_usage"] as? [String: Any]).map(tokenBreakdown)
+        let lastUsage = (info["last_token_usage"] as? [String: Any]).map(tokenBreakdown)
+        guard let delta = CodexTokenEventNormalizer.normalizedDelta(
+            totalUsage: totalUsage,
+            lastUsage: lastUsage,
+            previousTotal: &previous
+        ) else { return }
 
         sawTokenEvent = true
         tokenEventCount += 1
@@ -2302,6 +2295,16 @@ final class CodexUsageReader {
               let date = fractionalFormatter.date(from: timestamp) ?? plainFormatter.date(from: timestamp)
         else { return }
         deltas.append(SessionUsageDelta(date: date, tokens: delta))
+    }
+
+    private func tokenBreakdown(_ usage: [String: Any]) -> TokenBreakdown {
+        TokenBreakdown(
+            inputTokens: int64Value(usage["input_tokens"]) ?? 0,
+            cachedInputTokens: int64Value(usage["cached_input_tokens"]) ?? 0,
+            outputTokens: int64Value(usage["output_tokens"]) ?? 0,
+            reasoningOutputTokens: int64Value(usage["reasoning_output_tokens"]) ?? 0,
+            totalTokens: int64Value(usage["total_tokens"]) ?? 0
+        )
     }
 
     private func readTaskBoard(context: RuntimeLoadContext, messages: inout [String]) -> TaskBoard? {
@@ -10104,6 +10107,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-agent-selection") {
             exit(AgentSelectionSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-codex-token-events") {
+            exit(CodexTokenEventNormalizerSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--dump-json") {

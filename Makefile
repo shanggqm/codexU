@@ -27,7 +27,7 @@ else
 CODESIGN_FLAGS := --force --deep --options runtime --timestamp --sign "$(SIGN_IDENTITY)" $(CODESIGN_EXTRA_FLAGS)
 endif
 
-.PHONY: build run probe test-rate-limits test-statistics-time-zone test-particle-animation test-task-navigation test-local-system test-agent-selection test-parsers install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
+.PHONY: build run probe test-rate-limits test-statistics-time-zone test-particle-animation test-task-navigation test-local-system test-agent-selection test-codex-token-events test-parsers install dmg dmg-arm64 dmg-intel checksum checksum-arm64 checksum-intel release release-arm64 release-intel release-all release-package release-check notarize verify clean clean-dist
 
 build:
 	rm -rf "$(APP_DIR)"
@@ -67,6 +67,9 @@ test-local-system: build
 
 test-agent-selection: build
 	"$(MACOS_DIR)/$(APP_NAME)" --self-test-agent-selection
+
+test-codex-token-events: build
+	"$(MACOS_DIR)/$(APP_NAME)" --self-test-codex-token-events
 
 test-parsers: build
 	CODEXU_SKIP_BUILD=1 ./scripts/test-parsers.sh
