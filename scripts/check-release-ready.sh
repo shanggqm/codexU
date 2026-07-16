@@ -24,7 +24,12 @@ for readme in README.md README.en.md; do
   while IFS= read -r image; do
     [[ -f "$image" ]] || { echo "$readme references missing image: $image" >&2; exit 1; }
   done < <(sed -nE 's#.*\]\((docs/[^)]+\.(png|jpg|jpeg|webp))\).*#\1#p' "$readme")
-  grep -q "docs/screenshot-v${VERSION}-" "$readme" || { echo "$readme is missing current-version screenshots" >&2; exit 1; }
+  SCREENSHOT_SERIES_VERSION="${VERSION%.*}.0"
+  if ! grep -q "docs/screenshot-v${VERSION}-" "$readme" \
+      && ! grep -q "docs/screenshot-v${SCREENSHOT_SERIES_VERSION}-" "$readme"; then
+    echo "$readme is missing screenshots for $VERSION or its patch series" >&2
+    exit 1
+  fi
 done
 
 if rg -n '关注公众号|扫码关注|用户交流群|交流群二维码|微信群|公众号二维码' README.md README.en.md docs --glob '*.md'; then

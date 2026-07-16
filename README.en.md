@@ -17,6 +17,12 @@ codexU is a macOS menu bar and desktop app for tracking Codex quota, separate Co
 
 ![codexU v1.1.0 Runtime menu](docs/screenshot-v1.1.0-runtime-menu.png)
 
+## v1.1.1 Usage Fix
+
+v1.1.1 fixes inflated Codex token details in long-running or concurrent sessions. Codex cumulative `total_token_usage` snapshots can occasionally move backwards by a small amount; the previous parser treated every regression as a counter restart and added the entire cumulative snapshot again. codexU now prefers the explicit per-event `last_token_usage`. For older events without that field, negative cumulative corrections can no longer re-add a full session total. Affected analytics caches are invalidated and rebuilt automatically after upgrade.
+
+codexU's today, last-7-days, and lifetime token totals come from local session events. The Codex App usage page uses a server-side summary that can differ because of reporting delay, time-zone boundaries, and quota weighting, so the two sources are not expected to match at every moment.
+
 ## Who It Is For
 
 - Developers who use OpenAI Codex, Codex CLI, or the Codex desktop app every day.
@@ -143,10 +149,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-1.1.0-mac-arm64.dmg
-dist/codexU-1.1.0-mac-arm64.dmg.sha256
-dist/codexU-1.1.0-mac-x86_64.dmg
-dist/codexU-1.1.0-mac-x86_64.dmg.sha256
+dist/codexU-1.1.1-mac-arm64.dmg
+dist/codexU-1.1.1-mac-arm64.dmg.sha256
+dist/codexU-1.1.1-mac-x86_64.dmg
+dist/codexU-1.1.1-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).

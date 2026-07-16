@@ -21,6 +21,12 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 Codex 额度、Co
 
 ![codexU v1.1.0 菜单栏 Runtime 状态](docs/screenshot-v1.1.0-runtime-menu.png)
 
+## v1.1.1 统计修复
+
+v1.1.1 修复了 Codex 长会话或并发任务中 token 明细被重复放大的问题。根因是 Codex 的累计 `total_token_usage` 快照可能出现小幅回退，旧算法把任何回退都当作计数器重新开始，从而把整段累计值再次加入。现在优先累计每个事件明确提供的 `last_token_usage`；旧格式缺少该字段时，累计差分中的负修正也不会再触发整段重加。升级后会自动丢弃受影响的旧统计缓存并重新解析本机会话。
+
+codexU 的今日、近 7 天和累计 token 是按本机 session 事件统计；Codex App 的用量页来自服务端汇总，可能存在同步延迟、时区和额度权重差异，因此两者不保证在同一时刻完全一致。
+
 ## 适合谁
 
 - 经常使用 OpenAI Codex、Codex CLI 或 Codex 桌面应用的开发者。
@@ -162,10 +168,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-1.1.0-mac-arm64.dmg
-dist/codexU-1.1.0-mac-arm64.dmg.sha256
-dist/codexU-1.1.0-mac-x86_64.dmg
-dist/codexU-1.1.0-mac-x86_64.dmg.sha256
+dist/codexU-1.1.1-mac-arm64.dmg
+dist/codexU-1.1.1-mac-arm64.dmg.sha256
+dist/codexU-1.1.1-mac-x86_64.dmg
+dist/codexU-1.1.1-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。

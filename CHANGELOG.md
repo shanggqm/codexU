@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.1.1 - 2026-07-16
+
+- Fixed inflated Codex token totals by preferring each `token_count` event's per-turn `last_token_usage` instead of treating a small regression in the cumulative snapshot as a fresh counter.
+- Kept legacy cumulative-only logs compatible while clamping negative corrections so they cannot re-add an entire session total.
+- Invalidated the affected Codex analytics caches so previously inflated values are rebuilt automatically after upgrade.
+- Added unit and parser-fixture regression coverage for non-monotonic cumulative token snapshots.
+- Documented that codexU's local event totals and Codex App's delayed server-side usage summary are different data sources and may not match at the same moment.
+
 ## 1.1.0 - 2026-07-16
 
 - Kept Codex permanently enabled and added a single companion-Agent selector for OpenClaw, Claude Code, or Hermes.
