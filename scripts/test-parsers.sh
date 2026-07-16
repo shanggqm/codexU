@@ -15,8 +15,32 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 CODEX_HOME="$TMP_DIR/codex-home"
 CODEX_CACHE="$TMP_DIR/codex-cache"
 CODEX_ROLLOUT="$CODEX_HOME/.codex/sessions/2026/07/16/rollout-fixture.jsonl"
+FAKE_CODEX="$TMP_DIR/fake-codex"
 mkdir -p "$(dirname "$CODEX_ROLLOUT")" "$CODEX_CACHE"
 cp tests/fixtures/codex-session-nonmonotonic.jsonl "$CODEX_ROLLOUT"
+
+cat > "$FAKE_CODEX" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+while IFS= read -r line; do
+  id="$(printf '%s' "$line" | jq -r '.id // empty')"
+  case "$id" in
+    1)
+      printf '%s\n' '{"id":1,"result":{}}'
+      ;;
+    2)
+      printf '%s\n' '{"id":2,"result":{"account":{"type":"chatgpt","planType":"pro","email":null}}}'
+      ;;
+    3)
+      printf '%s\n' '{"id":3,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":12,"windowDurationMins":10080,"resetsAt":1784785418},"secondary":null,"credits":{"hasCredits":false,"unlimited":false,"balance":"0"}}}}'
+      ;;
+    4)
+      printf '%s\n' '{"id":4,"result":{"summary":{"lifetimeTokens":123456789,"peakDailyTokens":23456789},"dailyUsageBuckets":[]}}'
+      ;;
+  esac
+done
+SH
+chmod +x "$FAKE_CODEX"
 
 sqlite3 "$CODEX_HOME/.codex/state_5.sqlite" <<SQL
 CREATE TABLE threads (
@@ -55,6 +79,7 @@ CODEX_OUTPUT="$TMP_DIR/out-codex.json"
 CODEXU_HOME_OVERRIDE="$CODEX_HOME" \
 CODEXU_CACHE_OVERRIDE="$CODEX_CACHE" \
 CODEXU_RUNTIME_FILTER="codex" \
+CODEXU_CODEX_EXECUTABLE_OVERRIDE="$FAKE_CODEX" \
   "$APP_EXECUTABLE" --dump-json > "$CODEX_OUTPUT"
 
 CODEX_DETAILED_TOTAL="$(
@@ -62,6 +87,8 @@ CODEX_DETAILED_TOTAL="$(
     "$CODEX_OUTPUT"
 )"
 test "$CODEX_DETAILED_TOTAL" = "1630"
+test "$(jq -r '.runtimes[] | select(.scope == "codex") | .snapshot.cloudLifetimeTokens' "$CODEX_OUTPUT")" = "123456789"
+test "$(jq -r '.compat.codex.cloudLifetimeTokens' "$CODEX_OUTPUT")" = "123456789"
 grep -q '"tokenEventCount" : 3' "$CODEX_OUTPUT"
 
 SESSIONS_DIR="$TMP_DIR/.openclaw/agents/main/sessions"

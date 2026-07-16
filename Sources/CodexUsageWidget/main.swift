@@ -2524,6 +2524,11 @@ final class CodexUsageReader {
     }
 
     private func resolveCodexExecutablePath() -> String? {
+        if let override = ProcessInfo.processInfo.environment["CODEXU_CODEX_EXECUTABLE_OVERRIDE"],
+           fileManager.isExecutableFile(atPath: override) {
+            return override
+        }
+
         var candidates: [String] = []
 
         // The app's display name and install path may change, while its bundle identifier remains stable.
@@ -3517,9 +3522,18 @@ struct UsageWidgetView: View {
             }
 
             VStack(alignment: .leading, spacing: 13) {
+                if store.selectedRuntimeScope == .codex {
+                    CodexOfficialUsageStrip(
+                        lifetimeTokens: snapshot.cloudLifetimeTokens,
+                        language: language
+                    )
+                }
+
                 HStack(spacing: 12) {
                     DetailedTokenMetricCard(
-                        title: language.text("今日", "Today"),
+                        title: store.selectedRuntimeScope == .codex
+                            ? language.text("本机今日", "Local today")
+                            : language.text("今日", "Today"),
                         systemName: "sun.max.fill",
                         usage: snapshot.local?.detailedUsage?.today,
                         fallbackTokens: snapshot.local?.todayTokens,
@@ -3527,7 +3541,9 @@ struct UsageWidgetView: View {
                         language: language
                     )
                     DetailedTokenMetricCard(
-                        title: language.text("近 7 天", "Last 7 days"),
+                        title: store.selectedRuntimeScope == .codex
+                            ? language.text("本机近 7 天", "Local 7 days")
+                            : language.text("近 7 天", "Last 7 days"),
                         systemName: "calendar",
                         usage: snapshot.local?.detailedUsage?.sevenDay,
                         fallbackTokens: snapshot.local?.sevenDayTokens,
@@ -3535,7 +3551,9 @@ struct UsageWidgetView: View {
                         language: language
                     )
                     DetailedTokenMetricCard(
-                        title: language.text("累计", "Lifetime"),
+                        title: store.selectedRuntimeScope == .codex
+                            ? language.text("本机累计", "Local lifetime")
+                            : language.text("累计", "Lifetime"),
                         systemName: "sum",
                         usage: snapshot.local?.detailedUsage?.lifetime,
                         fallbackTokens: snapshot.local?.lifetimeTokens,
@@ -6335,6 +6353,63 @@ struct DetailedTokenMetricCard: View {
     }
 }
 
+struct CodexOfficialUsageStrip: View {
+    let lifetimeTokens: Int64?
+    let language: WidgetLanguage
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var sourceLabel: String {
+        lifetimeTokens == nil
+            ? language.text("暂不可用", "Unavailable")
+            : language.text("服务端汇总", "Server summary")
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(WidgetPalette.brandPrimary)
+
+            Text(language.text("Codex App 官方累计", "Codex App official lifetime"))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Text(formatTokens(lifetimeTokens))
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+
+            Text(sourceLabel)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(WidgetPalette.controlFill(colorScheme))
+                )
+        }
+        .padding(.horizontal, 11)
+        .frame(maxWidth: .infinity, minHeight: 34)
+        .background(
+            RoundedRectangle(cornerRadius: dashboardCardCornerRadius, style: .continuous)
+                .fill(WidgetPalette.surfaceTrack)
+                .overlay(
+                    RoundedRectangle(cornerRadius: dashboardCardCornerRadius, style: .continuous)
+                        .strokeBorder(WidgetPalette.controlStroke(colorScheme), lineWidth: 0.8)
+                )
+        )
+        .help(language.text(
+            "直接来自 Codex App 的 account/usage/read 服务端累计；本机三张卡用于事件明细、缓存拆分和估算价值。",
+            "Directly from the Codex App account/usage/read server summary. The three local cards provide event details, cache splits, and estimated value."
+        ))
+    }
+}
+
 struct TokenSplitBar: View {
     let tokens: TokenBreakdown?
 
@@ -9128,6 +9203,10 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
             "balance": jsonValue(credits.balance),
             "resetCredits": jsonValue(credits.resetCredits)
         ] as [String: Any]
+    }
+
+    if let cloudLifetimeTokens = snapshot.cloudLifetimeTokens {
+        object["cloudLifetimeTokens"] = cloudLifetimeTokens
     }
 
     if let local = snapshot.local {

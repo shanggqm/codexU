@@ -70,6 +70,10 @@ private func runtimeLegacyJSONObject(_ snapshot: UsageSnapshot) -> [String: Any]
         ] as [String: Any]
     }
 
+    if let cloudLifetimeTokens = snapshot.cloudLifetimeTokens {
+        object["cloudLifetimeTokens"] = cloudLifetimeTokens
+    }
+
     if let local = snapshot.local {
         object["local"] = runtimeJSONObject(local)
     }
