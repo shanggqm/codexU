@@ -21,6 +21,14 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 Codex 额度、Co
 
 ![codexU v1.1.0 菜单栏 Runtime 状态](docs/screenshot-v1.1.0-runtime-menu.png)
 
+## v1.1.2 Codex App 官方统计
+
+v1.1.2 将 Codex App `account/usage/read` 返回的官方累计 token 直接显示在 Codex 仪表盘顶部。此前 codexU 已读取该字段，但没有把它用于界面，因此用户只能看到本机 session 统计，容易误以为两者应当完全一致。
+
+官方累计明确标记为“Codex App 官方累计 / 服务端汇总”；原来的三张卡改名为“本机今日 / 本机近 7 天 / 本机累计”。本机事件仍负责缓存命中、输入/输出拆分、趋势、项目归因和 API 等效价值，因为 Codex App 官方汇总不提供这些明细，并且日桶可能晚于本机事件更新。
+
+![codexU v1.1.2 Codex App 官方累计与本机明细](docs/screenshot-v1.1.2-codex-official.png)
+
 ## v1.1.1 统计修复
 
 v1.1.1 修复了 Codex 长会话或并发任务中 token 明细被重复放大的问题。根因是 Codex 的累计 `total_token_usage` 快照可能出现小幅回退，旧算法把任何回退都当作计数器重新开始，从而把整段累计值再次加入。现在优先累计每个事件明确提供的 `last_token_usage`；旧格式缺少该字段时，累计差分中的负修正也不会再触发整段重加。升级后会自动丢弃受影响的旧统计缓存并重新解析本机会话。
@@ -168,10 +176,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-1.1.1-mac-arm64.dmg
-dist/codexU-1.1.1-mac-arm64.dmg.sha256
-dist/codexU-1.1.1-mac-x86_64.dmg
-dist/codexU-1.1.1-mac-x86_64.dmg.sha256
+dist/codexU-1.1.2-mac-arm64.dmg
+dist/codexU-1.1.2-mac-arm64.dmg.sha256
+dist/codexU-1.1.2-mac-x86_64.dmg
+dist/codexU-1.1.2-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。

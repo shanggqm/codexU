@@ -17,6 +17,14 @@ codexU is a macOS menu bar and desktop app for tracking Codex quota, separate Co
 
 ![codexU v1.1.0 Runtime menu](docs/screenshot-v1.1.0-runtime-menu.png)
 
+## v1.1.2 Codex App Official Usage
+
+v1.1.2 displays the official lifetime token total returned by the Codex App `account/usage/read` endpoint directly at the top of the Codex dashboard. codexU previously read this field but did not expose it in the interface, leaving only local session totals visible and making the two sources look as if they should match.
+
+The official value is explicitly labeled “Codex App official lifetime / Server summary.” The existing cards are renamed “Local today / Local 7 days / Local lifetime.” Local events remain the source for cache/input/output splits, trends, project attribution, and API-equivalent value because the official summary does not provide those details and its daily buckets can update later than local events.
+
+![codexU v1.1.2 Codex App official lifetime and local details](docs/screenshot-v1.1.2-codex-official.png)
+
 ## v1.1.1 Usage Fix
 
 v1.1.1 fixes inflated Codex token details in long-running or concurrent sessions. Codex cumulative `total_token_usage` snapshots can occasionally move backwards by a small amount; the previous parser treated every regression as a counter restart and added the entire cumulative snapshot again. codexU now prefers the explicit per-event `last_token_usage`. For older events without that field, negative cumulative corrections can no longer re-add a full session total. Affected analytics caches are invalidated and rebuilt automatically after upgrade.
@@ -149,10 +157,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-1.1.1-mac-arm64.dmg
-dist/codexU-1.1.1-mac-arm64.dmg.sha256
-dist/codexU-1.1.1-mac-x86_64.dmg
-dist/codexU-1.1.1-mac-x86_64.dmg.sha256
+dist/codexU-1.1.2-mac-arm64.dmg
+dist/codexU-1.1.2-mac-arm64.dmg.sha256
+dist/codexU-1.1.2-mac-x86_64.dmg
+dist/codexU-1.1.2-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).

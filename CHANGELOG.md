@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.1.2 - 2026-07-16
+
+- Surfaced the Codex App `account/usage/read` lifetime token total directly in the Codex dashboard instead of reading and then discarding it.
+- Labeled the existing event-derived cards as local today, local 7 days, and local lifetime so official server totals are no longer mixed with local detail statistics.
+- Kept local session events for cache/input/output splits, trends, project attribution, and API-equivalent value because the official summary does not provide those fields and can update later.
+- Added `cloudLifetimeTokens` to schema-v2 and legacy-compatible JSON output for source-level verification.
+
 ## 1.1.1 - 2026-07-16
 
 - Fixed inflated Codex token totals by preferring each `token_count` event's per-turn `last_token_usage` instead of treating a small regression in the cumulative snapshot as a fresh counter.
