@@ -17,6 +17,16 @@ codexU is a macOS menu bar and desktop app for tracking Codex quota, separate Co
 
 ![codexU v1.1.0 Runtime menu](docs/screenshot-v1.1.0-runtime-menu.png)
 
+## v1.1.3 Official Daily Usage and Task Fixes
+
+v1.1.3 uses the Codex App `account/usage/read` server-side daily buckets for Latest day, Last 7 days, Lifetime, and the usage trend. This is the same source used by the token-activity view in ChatGPT Profile. Local `token_count` events include cached context processing and remain useful for input/cache/output splits and project attribution, but they are now explicitly labeled “Local raw context (not official usage)” and are no longer presented as directly comparable to Profile.
+
+In the verified example, the official value for 2026-07-16 was `457,746,130`, while local raw context for the same day was `3,003,313,840`, including `2,836,447,744` cached-input tokens. The roughly 6.6× difference mainly reflects different metric definitions rather than a simple duplicated log line. Because no official conversion formula is published, codexU does not invent a weighting.
+
+OpenClaw tasks also gain correct minute-precision creation parsing, separate Created/Due labels, and activity ordering that never treats a future deadline as recent work. The detail view shows a structured summary and an honest completion bar; missing progress stays unknown instead of being estimated. Long-inactive tasks sink within their status column.
+
+![codexU v1.1.3 Codex App official daily usage and local raw context](docs/screenshot-v1.1.3-codex-official.png)
+
 ## v1.1.2 Codex App Official Usage
 
 v1.1.2 displays the official lifetime token total returned by the Codex App `account/usage/read` endpoint directly at the top of the Codex dashboard. codexU previously read this field but did not expose it in the interface, leaving only local session totals visible and making the two sources look as if they should match.
@@ -55,7 +65,7 @@ codexU's today, last-7-days, and lifetime token totals come from local session e
 - Codex tokens remain attributed to Codex when invoked by OpenClaw or Hermes; explicitly Codex-backed records are excluded from companion totals.
 - Task cards show Codex/OpenClaw/Claude Code/Hermes source badges and keep the existing detail-view click behavior; valid Codex threads can be opened directly in Codex from that detail view.
 - Shows local total CPU use, physical-memory use, and temperature/thermal state; when no public temperature sensor is available, it reports the macOS thermal state instead of inventing a temperature.
-- Summarizes token usage for today, the last 7 days, and lifetime totals with uncached input, cached input, and output splits.
+- Uses Codex App server buckets for the official latest-day, last-7-days, lifetime, and trend views; local raw context separately provides uncached-input, cached-input, and output splits.
 - Estimates the current month's API-equivalent value from OpenAI API token prices and shows progress against Plus, Pro 100, Pro 200, and the full monthly quota value. The bar uses a segmented nonlinear scale, so movement past Pro 200 remains visible and is not a linear dollar ratio.
 - Adds lower dashboard tabs for today's tasks, usage trend, project ranking, and Skill usage.
 - Builds a daily task board from local Codex threads and enabled Codex automations, grouped into active, pending, scheduled, and done columns.
@@ -157,10 +167,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-1.1.2-mac-arm64.dmg
-dist/codexU-1.1.2-mac-arm64.dmg.sha256
-dist/codexU-1.1.2-mac-x86_64.dmg
-dist/codexU-1.1.2-mac-x86_64.dmg.sha256
+dist/codexU-1.1.3-mac-arm64.dmg
+dist/codexU-1.1.3-mac-arm64.dmg.sha256
+dist/codexU-1.1.3-mac-x86_64.dmg
+dist/codexU-1.1.3-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).

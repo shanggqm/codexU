@@ -21,6 +21,16 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 Codex 额度、Co
 
 ![codexU v1.1.0 菜单栏 Runtime 状态](docs/screenshot-v1.1.0-runtime-menu.png)
 
+## v1.1.3 官方日统计与任务修复
+
+v1.1.3 直接使用 Codex App `account/usage/read` 的服务端日桶展示“最近一天 / 近 7 天 / 累计”，用量趋势也切换到同一官方来源。它对应 ChatGPT 个人资料里的 token activity；本机 `token_count` 包含缓存上下文处理量，继续用于输入、缓存、输出和项目归因，但明确标为“本机原始上下文（非官方用量）”，不再拿它和个人资料数字直接比较。
+
+例如本机核验时，个人资料对应的 2026-07-16 官方值是 `457,746,130`，同一天本机原始上下文是 `3,003,313,840`，其中缓存输入为 `2,836,447,744`。约 6.6 倍的差距主要来自两套指标定义不同，不是简单把某个日志行重复相加；官方没有公开两者之间的换算公式，因此 codexU 不再猜测权重。
+
+OpenClaw 任务同时修复了分钟级创建时间解析、创建/截止分栏、未来截止日期误当最近活动的问题。任务详情会展示整理后的摘要和真实完成进度；没有进度字段时显示未知，不伪造百分比。长时间不活跃的任务会在所属状态列中沉底。
+
+![codexU v1.1.3 Codex App 官方日统计与本机原始上下文](docs/screenshot-v1.1.3-codex-official.png)
+
 ## v1.1.2 Codex App 官方统计
 
 v1.1.2 将 Codex App `account/usage/read` 返回的官方累计 token 直接显示在 Codex 仪表盘顶部。此前 codexU 已读取该字段，但没有把它用于界面，因此用户只能看到本机 session 统计，容易误以为两者应当完全一致。
@@ -59,7 +69,7 @@ codexU 的今日、近 7 天和累计 token 是按本机 session 事件统计；
 - Codex 即使由 OpenClaw 或 Hermes 调用，token 仍计入 Codex；明确属于 Codex 的记录不会重复计入第二 Agent。
 - 任务卡显示 Codex / OpenClaw / Claude Code / Hermes 来源标签，点击后保持打开详情；有效 Codex 线程可从详情页直接在 Codex 中打开。
 - 主界面展示本机 CPU 总占用、物理内存占用和温度/热状态；没有公开可用的温度传感器时显示 macOS 热状态，不伪造温度数值。
-- 汇总今日、近 7 天和累计 token 用量，并细分未缓存输入、命中缓存输入和输出。
+- Codex 官方卡片和用量趋势使用 Codex App 服务端的最近一天、近 7 天和累计日桶；本机原始上下文另行细分未缓存输入、命中缓存输入和输出。
 - 按 OpenAI API token 价格估算本月 API 等效价值，并在 Plus、Pro 100、Pro 200 和满额月价值之间展示进度刻度。
 - 下方仪表盘支持今日任务、用量趋势、项目排行和 Skill 使用视图。
 - 从本机 Codex 线程和启用中的 automations 生成今日任务看板，按进行中、待处理、定时、完成四类组织任务。
@@ -176,10 +186,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-1.1.2-mac-arm64.dmg
-dist/codexU-1.1.2-mac-arm64.dmg.sha256
-dist/codexU-1.1.2-mac-x86_64.dmg
-dist/codexU-1.1.2-mac-x86_64.dmg.sha256
+dist/codexU-1.1.3-mac-arm64.dmg
+dist/codexU-1.1.3-mac-arm64.dmg.sha256
+dist/codexU-1.1.3-mac-x86_64.dmg
+dist/codexU-1.1.3-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。

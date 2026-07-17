@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.1.3 - 2026-07-17
+
+- Switched Codex headline cards and usage trends to the official daily token buckets returned by the Codex App `account/usage/read` service, matching the token-activity source shown in ChatGPT Profile.
+- Kept locally parsed session events as a separately labeled non-official context-volume breakdown; cached context is no longer presented as if it were comparable to the official server total.
+- Fixed OpenClaw task timestamps by parsing minute-precision creation values, separating creation and deadline labels, and never using a future deadline as recent activity.
+- Added structured task summaries and honest completion progress bars based on explicit progress fields or completed status, with unknown progress shown as unavailable instead of estimated.
+- Made long-inactive OpenClaw tasks sink within their status column while preserving the existing task-card detail interaction and Codex deep-link action.
+
 ## 1.1.2 - 2026-07-16
 
 - Surfaced the Codex App `account/usage/read` lifetime token total directly in the Codex dashboard instead of reading and then discarding it.
