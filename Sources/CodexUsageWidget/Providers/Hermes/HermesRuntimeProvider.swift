@@ -22,6 +22,7 @@ struct HermesRuntimeProvider: RuntimeUsageProvider {
             sevenDayQuota: nil,
             credits: nil,
             cloudLifetimeTokens: nil,
+            cloudUsageTrend: nil,
             local: result.local,
             taskBoard: result.taskBoard,
             messages: messages
@@ -455,6 +456,8 @@ private final class HermesStateReader {
                 source: .hermes,
                 summary: nil,
                 recentReply: nil,
+                timing: nil,
+                progress: kind == .done ? TaskProgress(percent: 100, origin: .completedStatus) : nil,
                 navigationTarget: nil
             )
         }

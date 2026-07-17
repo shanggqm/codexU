@@ -27,6 +27,7 @@ struct ClaudeCodeRuntimeProvider: RuntimeUsageProvider {
             sevenDayQuota: statusLine.secondary,
             credits: nil,
             cloudLifetimeTokens: nil,
+            cloudUsageTrend: nil,
             local: local,
             taskBoard: taskBoard,
             messages: messages
@@ -777,6 +778,8 @@ private final class ClaudeCodeTaskReader {
             source: .claudeCode,
             summary: nil,
             recentReply: nil,
+            timing: nil,
+            progress: kind == .done ? TaskProgress(percent: 100, origin: .completedStatus) : nil,
             navigationTarget: nil
         )
     }

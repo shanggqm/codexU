@@ -21,6 +21,7 @@ struct OpenClawRuntimeProvider: RuntimeUsageProvider {
             sevenDayQuota: nil,
             credits: nil,
             cloudLifetimeTokens: nil,
+            cloudUsageTrend: nil,
             local: local,
             taskBoard: taskBoard,
             messages: messages
@@ -600,11 +601,22 @@ private final class OpenClawTaskReader {
             let id = (row["id"] as? String) ?? UUID().uuidString
             let status = (row["status"] as? String) ?? "pending"
             let kind = openClawTaskKind(status)
-            let description = openClawTaskText(row["description"] as? String, limit: 1_200)
-            let details = openClawTaskText(row["details"] as? String, limit: 1_600)
-            let summary = [description, details].compactMap { $0 }.joined(separator: "\n")
             let priority = (row["priority"] as? String) ?? status
-            let updatedAt = openClawDateValue(row["created"]) ?? openClawDateValue(row["deadline"])
+            let created = openClawTaskDateValue(row["created"])
+            let deadline = openClawTaskDateValue(row["deadline"])
+            let recordedActivity = openClawTaskDateValue(row["updatedAt"])
+                ?? openClawTaskDateValue(row["updated_at"])
+                ?? openClawTaskDateValue(row["lastActiveAt"])
+                ?? openClawTaskDateValue(row["last_active_at"])
+            let activity = recordedActivity.flatMap { value in
+                value.date <= context.now.addingTimeInterval(5 * 60) ? value : nil
+            } ?? created
+            let timing = TaskTiming(
+                createdAt: created?.date,
+                createdHasTime: created?.hasTime ?? false,
+                deadlineAt: deadline?.date,
+                deadlineHasTime: deadline?.hasTime ?? false
+            )
 
             return TaskItem(
                 id: "openclaw-task-\(id)",
@@ -612,12 +624,14 @@ private final class OpenClawTaskReader {
                 title: title,
                 detail: [priority, row["source"] as? String].compactMap { $0 }.joined(separator: " · "),
                 chip: openClawTaskChip(status: status, priority: priority, kind: kind),
-                updatedAt: updatedAt,
+                updatedAt: activity?.date,
                 tokens: nil,
                 kind: kind,
                 source: .openClaw,
-                summary: summary.isEmpty ? nil : summary,
+                summary: openClawTaskSummary(row),
                 recentReply: nil,
+                timing: timing,
+                progress: openClawTaskProgress(row, kind: kind),
                 navigationTarget: nil
             )
         }
@@ -665,6 +679,8 @@ private final class OpenClawTaskReader {
                 source: .openClaw,
                 summary: openClawTaskText(conversation.lastUser, limit: 1_200),
                 recentReply: openClawTaskText(conversation.lastAssistant, limit: 1_600),
+                timing: nil,
+                progress: kind == .done ? TaskProgress(percent: 100, origin: .completedStatus) : nil,
                 navigationTarget: nil
             )
         }
@@ -849,25 +865,140 @@ private func openClawTaskText(_ value: String?, limit: Int) -> String? {
     return String(compact.prefix(max(1, limit - 1))) + "…"
 }
 
-private func openClawDateValue(_ value: Any?) -> Date? {
+private func openClawTaskSummary(_ row: [String: Any]) -> String? {
+    var lines: [String] = []
+    if let description = openClawMultilineTaskText(row["description"] as? String, limit: 1_200) {
+        let normalized = description
+            .replacingOccurrences(
+                of: "根因\\s*[:：]\\s*根因\\s*[:：]\\s*",
+                with: "根因：",
+                options: [.regularExpression, .caseInsensitive]
+            )
+            .replacingOccurrences(of: "方向:", with: "方向：")
+            .replacingOccurrences(of: "如何:", with: "行动：")
+        lines.append(normalized)
+    }
+
+    let structuredFields: [(String, String)] = [
+        ("负责人", "responsible"),
+        ("完成标准", "kpi"),
+        ("风险", "risk"),
+        ("备选方案", "backup")
+    ]
+    for (label, key) in structuredFields {
+        if let value = openClawTaskText(row[key] as? String, limit: 500) {
+            lines.append("\(label)：\(value)")
+        }
+    }
+
+    if let details = openClawMultilineTaskText(row["details"] as? String, limit: 1_200) {
+        lines.append("补充：\(details)")
+    }
+
+    return openClawMultilineTaskText(lines.joined(separator: "\n"), limit: 2_400)
+}
+
+private func openClawMultilineTaskText(_ value: String?, limit: Int) -> String? {
+    guard let value else { return nil }
+    let compact = value
+        .components(separatedBy: .newlines)
+        .map {
+            $0.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n")
+    guard !compact.isEmpty else { return nil }
+    if compact.count <= limit { return compact }
+    return String(compact.prefix(max(1, limit - 1))) + "…"
+}
+
+private func openClawTaskProgress(_ row: [String: Any], kind: TaskColumnKind) -> TaskProgress? {
+    let keys = [
+        "progressPercent",
+        "progress_percent",
+        "percentComplete",
+        "completionPercent",
+        "contentProgress",
+        "distillProgress",
+        "progress",
+        "completion"
+    ]
+    for key in keys {
+        guard let raw = row[key], let percent = openClawProgressPercent(raw, key: key) else { continue }
+        return TaskProgress(percent: percent, origin: .explicit)
+    }
+    if kind == .done {
+        return TaskProgress(percent: 100, origin: .completedStatus)
+    }
+    return nil
+}
+
+private func openClawProgressPercent(_ value: Any, key: String) -> Double? {
+    let rawText = value as? String
+    let number: Double?
+    if let value = value as? NSNumber {
+        number = value.doubleValue
+    } else if let rawText {
+        number = Double(rawText.replacingOccurrences(of: "%", with: "").trimmingCharacters(in: .whitespaces))
+    } else {
+        number = nil
+    }
+    guard var percent = number, percent.isFinite, percent >= 0 else { return nil }
+    let isExplicitPercent = key.lowercased().contains("percent") || (rawText?.contains("%") ?? false)
+    if !isExplicitPercent, percent <= 1 {
+        percent *= 100
+    }
+    guard percent <= 100 else { return nil }
+    return percent
+}
+
+private struct OpenClawTaskDateValue {
+    let date: Date
+    let hasTime: Bool
+}
+
+private func openClawTaskDateValue(_ value: Any?) -> OpenClawTaskDateValue? {
     if let number = value as? NSNumber {
         let raw = number.doubleValue
-        return Date(timeIntervalSince1970: raw > 10_000_000_000 ? raw / 1_000 : raw)
+        return OpenClawTaskDateValue(
+            date: Date(timeIntervalSince1970: raw > 10_000_000_000 ? raw / 1_000 : raw),
+            hasTime: true
+        )
     }
     guard let string = value as? String, !string.isEmpty else { return nil }
     let fractional = ISO8601DateFormatter()
     fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = fractional.date(from: string) { return date }
+    if let date = fractional.date(from: string) {
+        return OpenClawTaskDateValue(date: date, hasTime: true)
+    }
     let plain = ISO8601DateFormatter()
     plain.formatOptions = [.withInternetDateTime]
-    if let date = plain.date(from: string) { return date }
+    if let date = plain.date(from: string) {
+        return OpenClawTaskDateValue(date: date, hasTime: true)
+    }
+
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
-    for format in ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd"] {
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.isLenient = false
+    let formats: [(String, Bool)] = [
+        ("yyyy-MM-dd HH:mm:ss", true),
+        ("yyyy-MM-dd HH:mm", true),
+        ("yyyy-MM-dd'T'HH:mm", true),
+        ("yyyy-MM-dd", false)
+    ]
+    for (format, hasTime) in formats {
         formatter.dateFormat = format
-        if let date = formatter.date(from: string) { return date }
+        if let date = formatter.date(from: string) {
+            return OpenClawTaskDateValue(date: date, hasTime: hasTime)
+        }
     }
     return nil
+}
+
+private func openClawDateValue(_ value: Any?) -> Date? {
+    openClawTaskDateValue(value)?.date
 }
 
 private func openClawInt64Value(_ value: Any?) -> Int64 {

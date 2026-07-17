@@ -74,6 +74,10 @@ private func runtimeLegacyJSONObject(_ snapshot: UsageSnapshot) -> [String: Any]
         object["cloudLifetimeTokens"] = cloudLifetimeTokens
     }
 
+    if let cloudUsageTrend = snapshot.cloudUsageTrend {
+        object["cloudUsageTrend"] = runtimeJSONObject(cloudUsageTrend)
+    }
+
     if let local = snapshot.local {
         object["local"] = runtimeJSONObject(local)
     }
@@ -175,7 +179,13 @@ private func runtimeJSONObject(_ taskBoard: TaskBoard) -> [String: Any] {
                         "source": item.source.runtimeId,
                         "hasSummary": item.summary != nil,
                         "hasRecentReply": item.recentReply != nil,
-                        "hasNavigationTarget": item.codexNavigationTarget != nil
+                        "hasNavigationTarget": item.codexNavigationTarget != nil,
+                        "createdAt": runtimeJSONValue(runtimeISOString(item.timing?.createdAt)),
+                        "createdHasTime": item.timing?.createdHasTime ?? false,
+                        "deadlineAt": runtimeJSONValue(runtimeISOString(item.timing?.deadlineAt)),
+                        "deadlineHasTime": item.timing?.deadlineHasTime ?? false,
+                        "progressPercent": runtimeJSONValue(item.progress?.percent),
+                        "progressOrigin": runtimeJSONValue(item.progress?.origin.rawValue)
                     ] as [String: Any]
                 }
             ] as [String: Any]
@@ -195,6 +205,20 @@ private func runtimeJSONObject(_ usage: PricedTokenUsage) -> [String: Any] {
             "visibleTotalTokens": usage.tokens.visibleTotalTokens
         ] as [String: Any],
         "estimatedCostUSD": usage.estimatedCostUSD
+    ] as [String: Any]
+}
+
+private func runtimeJSONObject(_ trend: UsageTrend) -> [String: Any] {
+    [
+        "sourceQuality": trend.sourceQuality.rawValue,
+        "activeDayCount": trend.activeDayCount,
+        "sevenDayTokens": trend.summary.sevenDay.tokens.visibleTotalTokens,
+        "latestBucket": trend.dayBuckets.last(where: { $0.tokens > 0 }).map { bucket in
+            ["day": bucket.id, "tokens": bucket.tokens] as [String: Any]
+        } ?? NSNull(),
+        "dailyBuckets": trend.dayBuckets.filter { $0.tokens > 0 }.map { bucket in
+            ["day": bucket.id, "tokens": bucket.tokens] as [String: Any]
+        }
     ] as [String: Any]
 }
 

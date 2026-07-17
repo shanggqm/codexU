@@ -43,6 +43,7 @@ struct DailyTokenBucket: Identifiable, Equatable {
 }
 
 enum UsageSourceQuality: String, Equatable, Codable {
+    case official
     case detailed
     case approximate
 }
@@ -234,6 +235,23 @@ enum TaskColumnKind: String, Equatable {
     case done
 }
 
+struct TaskTiming: Equatable {
+    let createdAt: Date?
+    let createdHasTime: Bool
+    let deadlineAt: Date?
+    let deadlineHasTime: Bool
+}
+
+enum TaskProgressOrigin: String, Equatable {
+    case explicit
+    case completedStatus
+}
+
+struct TaskProgress: Equatable {
+    let percent: Double
+    let origin: TaskProgressOrigin
+}
+
 struct TaskItem: Identifiable, Equatable {
     let id: String
     let code: String
@@ -246,6 +264,8 @@ struct TaskItem: Identifiable, Equatable {
     let source: RuntimeScope
     let summary: String?
     let recentReply: String?
+    let timing: TaskTiming?
+    let progress: TaskProgress?
     let navigationTarget: TaskNavigationTarget?
 }
 
@@ -275,6 +295,7 @@ struct UsageSnapshot: Equatable {
     let sevenDayQuota: RateWindow?
     let credits: CreditsInfo?
     let cloudLifetimeTokens: Int64?
+    let cloudUsageTrend: UsageTrend?
     let local: LocalUsage?
     let taskBoard: TaskBoard?
     let messages: [String]
@@ -289,6 +310,7 @@ struct UsageSnapshot: Equatable {
         sevenDayQuota: nil,
         credits: nil,
         cloudLifetimeTokens: nil,
+        cloudUsageTrend: nil,
         local: nil,
         taskBoard: nil,
         messages: ["正在读取 codexU 数据"]
@@ -305,6 +327,7 @@ struct UsageSnapshot: Equatable {
             sevenDayQuota: sevenDayQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
+            cloudUsageTrend: cloudUsageTrend,
             local: local,
             taskBoard: taskBoard,
             messages: messages
@@ -322,6 +345,7 @@ struct UsageSnapshot: Equatable {
             sevenDayQuota: sevenDayQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
+            cloudUsageTrend: cloudUsageTrend,
             local: local,
             taskBoard: taskBoard,
             messages: messages + additionalMessages
@@ -343,6 +367,7 @@ struct UsageSnapshot: Equatable {
             sevenDayQuota: sevenDayQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
+            cloudUsageTrend: cloudUsageTrend,
             local: local,
             taskBoard: taskBoard,
             messages: messages
@@ -988,6 +1013,7 @@ final class CodexUsageReader {
         let appServer = readAppServer(messages: &messages)
         let local = readLocalUsage(context: context, messages: &messages)
         let taskBoard = readTaskBoard(context: context, messages: &messages)
+        let cloudUsageTrend = makeCloudUsageTrend(appServer.cloudDailyUsageBuckets, context: context)
 
         return UsageSnapshot(
             refreshedAt: context.now,
@@ -999,6 +1025,7 @@ final class CodexUsageReader {
             sevenDayQuota: appServer.sevenDayQuota,
             credits: appServer.credits,
             cloudLifetimeTokens: appServer.cloudLifetimeTokens,
+            cloudUsageTrend: cloudUsageTrend,
             local: local,
             taskBoard: taskBoard,
             messages: messages
@@ -1020,6 +1047,7 @@ final class CodexUsageReader {
         var rateLimitDiagnostics: [String] = []
         var credits: CreditsInfo?
         var cloudLifetimeTokens: Int64?
+        var cloudDailyUsageBuckets: [DailyTokenBucket] = []
     }
 
     private func readAppServer(messages: inout [String]) -> AppServerSnapshot {
@@ -1115,6 +1143,7 @@ final class CodexUsageReader {
                 parseRateLimits(result, into: &snapshot)
             case 4:
                 snapshot.cloudLifetimeTokens = parseCloudLifetimeTokens(result)
+                snapshot.cloudDailyUsageBuckets = parseCloudDailyUsageBuckets(result)
             default:
                 break
             }
@@ -1301,6 +1330,60 @@ final class CodexUsageReader {
     private func parseCloudLifetimeTokens(_ result: [String: Any]) -> Int64? {
         guard let summary = result["summary"] as? [String: Any] else { return nil }
         return int64Value(summary["lifetimeTokens"])
+    }
+
+    private func parseCloudDailyUsageBuckets(_ result: [String: Any]) -> [DailyTokenBucket] {
+        guard let rows = result["dailyUsageBuckets"] as? [[String: Any]] else { return [] }
+        return rows.compactMap { row in
+            guard let startDate = row["startDate"] as? String,
+                  startDate.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil,
+                  let tokens = int64Value(row["tokens"]),
+                  tokens >= 0
+            else { return nil }
+            return DailyTokenBucket(id: startDate, label: startDate, tokens: tokens)
+        }
+        .sorted { $0.id < $1.id }
+    }
+
+    private func makeCloudUsageTrend(
+        _ buckets: [DailyTokenBucket],
+        context: RuntimeLoadContext
+    ) -> UsageTrend? {
+        guard !buckets.isEmpty else { return nil }
+        let calendar = context.statistics.calendar
+        let dayStart = calendar.startOfDay(for: context.now)
+        let sevenDayStart = calendar.date(byAdding: .day, value: -6, to: dayStart) ?? dayStart
+        let trendStart = calendar.date(byAdding: .day, value: -190, to: dayStart) ?? sevenDayStart
+        var monthComponents = calendar.dateComponents([.year, .month], from: dayStart)
+        monthComponents.day = 1
+        monthComponents.hour = 0
+        monthComponents.minute = 0
+        monthComponents.second = 0
+        let monthStart = calendar.date(from: monthComponents) ?? dayStart
+
+        var dailyUsage: [String: PricedTokenUsage] = [:]
+        for bucket in buckets {
+            dailyUsage[bucket.id] = PricedTokenUsage(
+                tokens: TokenBreakdown(
+                    inputTokens: 0,
+                    cachedInputTokens: 0,
+                    outputTokens: 0,
+                    reasoningOutputTokens: 0,
+                    totalTokens: bucket.tokens
+                ),
+                estimatedCostUSD: 0
+            )
+        }
+
+        return makeUsageTrend(
+            dailyUsage: dailyUsage,
+            dayStart: dayStart,
+            sevenDayStart: sevenDayStart,
+            trendStart: trendStart,
+            monthStart: monthStart,
+            sourceQuality: .official,
+            calendar: calendar
+        )
     }
 
     private func codexDatabasePaths(context: RuntimeLoadContext) -> [String] {
@@ -1645,7 +1728,8 @@ final class CodexUsageReader {
                 sevenDayStart: sevenDayStart,
                 trendStart: trendStart,
                 monthStart: monthStart,
-                sourceQuality: .detailed
+                sourceQuality: .detailed,
+                calendar: calendar
             ),
             recentProjects: recentProjectUsage.values
                 .map { $0.makeUsage() }
@@ -1673,9 +1757,9 @@ final class CodexUsageReader {
         sevenDayStart: Date,
         trendStart: Date,
         monthStart: Date,
-        sourceQuality: UsageSourceQuality
+        sourceQuality: UsageSourceQuality,
+        calendar: Calendar
     ) -> UsageTrend {
-        let calendar = Calendar.current
         var buckets: [UsageDayBucket] = []
         var cursor = calendar.startOfDay(for: trendStart)
         let end = calendar.startOfDay(for: dayStart)
@@ -1722,8 +1806,8 @@ final class CodexUsageReader {
             isNewActivity = sevenDay.tokens.visibleTotalTokens > 0
         }
 
-        let dayOfMonth = max(calendar.component(.day, from: Date()), 1)
-        let daysInMonth = calendar.range(of: .day, in: .month, for: Date())?.count ?? dayOfMonth
+        let dayOfMonth = max(calendar.component(.day, from: dayStart), 1)
+        let daysInMonth = calendar.range(of: .day, in: .month, for: dayStart)?.count ?? dayOfMonth
         let projectedMonthCostUSD: Double?
         if dayOfMonth >= 2, month.estimatedCostUSD > 0 {
             projectedMonthCostUSD = month.estimatedCostUSD / Double(dayOfMonth) * Double(daysInMonth)
@@ -1870,7 +1954,8 @@ final class CodexUsageReader {
             sevenDayStart: sevenDayStart,
             trendStart: trendStart,
             monthStart: monthStart,
-            sourceQuality: .approximate
+            sourceQuality: .approximate,
+            calendar: calendar
         )
     }
 
@@ -2423,6 +2508,8 @@ final class CodexUsageReader {
             source: .codex,
             summary: summary,
             recentReply: recentReply,
+            timing: nil,
+            progress: kind == .done ? TaskProgress(percent: 100, origin: .completedStatus) : nil,
             navigationTarget: TaskNavigationTarget.codexThread(id: rawThreadID)
         )
     }
@@ -2489,6 +2576,8 @@ final class CodexUsageReader {
                 source: .codex,
                 summary: taskDisplayText(detail, limit: 1_200),
                 recentReply: nil,
+                timing: nil,
+                progress: nil,
                 navigationTarget: nil
             ))
         }
@@ -3525,14 +3614,25 @@ struct UsageWidgetView: View {
                 if store.selectedRuntimeScope == .codex {
                     CodexOfficialUsageStrip(
                         lifetimeTokens: snapshot.cloudLifetimeTokens,
+                        trend: snapshot.cloudUsageTrend,
                         language: language
                     )
+                    HStack(spacing: 5) {
+                        Image(systemName: "doc.text.magnifyingglass")
+                        Text(language.text("本机原始上下文（非官方用量）", "Local raw context (not official usage)"))
+                    }
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .help(language.text(
+                        "来自本机 token_count，包含大量缓存上下文，只用于输入/缓存/输出拆分和项目归因，不能与 Codex App 个人资料的官方 token 活动直接比较。",
+                        "From local token_count events, including cached context. Used for input/cache/output breakdowns and project attribution, not for comparison with official Codex App token activity."
+                    ))
                 }
 
                 HStack(spacing: 12) {
                     DetailedTokenMetricCard(
                         title: store.selectedRuntimeScope == .codex
-                            ? language.text("本机今日", "Local today")
+                            ? language.text("上下文·今日", "Context today")
                             : language.text("今日", "Today"),
                         systemName: "sun.max.fill",
                         usage: snapshot.local?.detailedUsage?.today,
@@ -3542,7 +3642,7 @@ struct UsageWidgetView: View {
                     )
                     DetailedTokenMetricCard(
                         title: store.selectedRuntimeScope == .codex
-                            ? language.text("本机近 7 天", "Local 7 days")
+                            ? language.text("上下文·近 7 天", "Context 7 days")
                             : language.text("近 7 天", "Last 7 days"),
                         systemName: "calendar",
                         usage: snapshot.local?.detailedUsage?.sevenDay,
@@ -3552,7 +3652,7 @@ struct UsageWidgetView: View {
                     )
                     DetailedTokenMetricCard(
                         title: store.selectedRuntimeScope == .codex
-                            ? language.text("本机累计", "Local lifetime")
+                            ? language.text("上下文·累计", "Context lifetime")
                             : language.text("累计", "Lifetime"),
                         systemName: "sum",
                         usage: snapshot.local?.detailedUsage?.lifetime,
@@ -3602,7 +3702,7 @@ struct UsageWidgetView: View {
             taskBoardContent
         case .usage:
             UsageTrendPanel(
-                trend: snapshot.local?.usageTrend,
+                trend: displayedUsageTrend,
                 runtimeScope: store.selectedRuntimeScope,
                 language: language
             )
@@ -3657,8 +3757,8 @@ struct UsageWidgetView: View {
         case .tasks:
             return taskBoardSummary
         case .usage:
-            guard let trend = snapshot.local?.usageTrend else { return language.text("读取中", "Loading") }
-            let quality = trend.sourceQuality == .approximate ? language.text("粗略统计", "Approx.") : language.text("精细统计", "Detailed")
+            guard let trend = displayedUsageTrend else { return language.text("读取中", "Loading") }
+            let quality = sourceQualityText(trend.sourceQuality, language: language)
             return language.text("\(trend.activeDayCount) 活跃日 · \(quality)", "\(trend.activeDayCount) active days · \(quality)")
         case .projects:
             let activeCount = snapshot.local?.projectBoard?.recentProjects.count ?? 0
@@ -3669,6 +3769,13 @@ struct UsageWidgetView: View {
             let toolCount = snapshot.local?.toolUsages.count ?? 0
             return language.text("\(skillCount) Skill · \(toolCount) 工具", "\(skillCount) skills · \(toolCount) tools")
         }
+    }
+
+    private var displayedUsageTrend: UsageTrend? {
+        if store.selectedRuntimeScope == .codex {
+            return snapshot.cloudUsageTrend ?? snapshot.local?.usageTrend
+        }
+        return snapshot.local?.usageTrend
     }
 
     private var taskBoardColumns: [TaskColumn] {
@@ -6355,46 +6462,64 @@ struct DetailedTokenMetricCard: View {
 
 struct CodexOfficialUsageStrip: View {
     let lifetimeTokens: Int64?
+    let trend: UsageTrend?
     let language: WidgetLanguage
 
     @Environment(\.colorScheme) private var colorScheme
 
     private var sourceLabel: String {
-        lifetimeTokens == nil
+        lifetimeTokens == nil && trend == nil
             ? language.text("暂不可用", "Unavailable")
             : language.text("服务端汇总", "Server summary")
     }
 
+    private var latestBucket: UsageDayBucket? {
+        trend?.dayBuckets.last(where: { $0.tokens > 0 })
+    }
+
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(WidgetPalette.brandPrimary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(WidgetPalette.brandPrimary)
+                Text(language.text("Codex App 官方用量", "Codex App official usage"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(sourceLabel)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(WidgetPalette.controlFill(colorScheme))
+                    )
+            }
 
-            Text(language.text("Codex App 官方累计", "Codex App official lifetime"))
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-
-            Spacer(minLength: 8)
-
-            Text(formatTokens(lifetimeTokens))
-                .font(.system(size: 15, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .lineLimit(1)
-
-            Text(sourceLabel)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(WidgetPalette.controlFill(colorScheme))
+            HStack(spacing: 0) {
+                officialMetric(
+                    title: latestBucket.map {
+                        language.text("最近一天 \(shortDate($0.date))", "Latest \(shortDate($0.date))")
+                    } ?? language.text("最近一天", "Latest day"),
+                    tokens: latestBucket?.tokens
                 )
+                Divider().frame(height: 30)
+                officialMetric(
+                    title: language.text("近 7 天", "Last 7 days"),
+                    tokens: trend?.summary.sevenDay.tokens.visibleTotalTokens
+                )
+                Divider().frame(height: 30)
+                officialMetric(
+                    title: language.text("累计", "Lifetime"),
+                    tokens: lifetimeTokens
+                )
+            }
         }
         .padding(.horizontal, 11)
-        .frame(maxWidth: .infinity, minHeight: 34)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, minHeight: 72)
         .background(
             RoundedRectangle(cornerRadius: dashboardCardCornerRadius, style: .continuous)
                 .fill(WidgetPalette.surfaceTrack)
@@ -6404,9 +6529,31 @@ struct CodexOfficialUsageStrip: View {
                 )
         )
         .help(language.text(
-            "直接来自 Codex App 的 account/usage/read 服务端累计；本机三张卡用于事件明细、缓存拆分和估算价值。",
-            "Directly from the Codex App account/usage/read server summary. The three local cards provide event details, cache splits, and estimated value."
+            "直接来自 Codex App 的 account/usage/read，与个人资料中的 token 活动使用同一服务端数据；本机上下文数据仅用于拆分和归因。",
+            "Directly from Codex App account/usage/read, the same server data used by Profile token activity. Local context data is only for breakdowns and attribution."
         ))
+    }
+
+    private func officialMetric(title: String, tokens: Int64?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(formatTokens(tokens))
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+    }
+
+    private func shortDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: language.isChinese ? "zh_CN" : "en_US_POSIX")
+        formatter.dateFormat = language.isChinese ? "M/d" : "MMM d"
+        return formatter.string(from: date)
     }
 }
 
@@ -6896,12 +7043,15 @@ private func usageTooltipPayload(
 ) -> ChartTooltipPayload {
     let title = fullDateText(date, language: language)
     guard let usage, usage.tokens.visibleTotalTokens > 0 else {
+        let emptyStatus = sourceQuality == .official
+            ? language.text("无官方记录", "No official records")
+            : language.text("无本机记录", "No local records")
         return ChartTooltipPayload(
             title: title,
             rows: [
                 ChartTooltipRow(id: "runtime", label: "Runtime", value: runtimeScope.displayName),
                 ChartTooltipRow(id: "total", label: language.text("总量", "Total"), value: "0 tokens"),
-                ChartTooltipRow(id: "status", label: language.text("状态", "Status"), value: language.text("无本机记录", "No local records")),
+                ChartTooltipRow(id: "status", label: language.text("状态", "Status"), value: emptyStatus),
                 ChartTooltipRow(id: "source", label: language.text("口径", "Source"), value: sourceQualityText(sourceQuality, language: language))
             ]
         )
@@ -7037,7 +7187,7 @@ struct UsageHeatmapCard: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(.top, 4)
-                .help(usageSourceHelp(runtimeScope: runtimeScope, language: language))
+                .help(usageSourceHelp(runtimeScope: runtimeScope, sourceQuality: trend.sourceQuality, language: language))
             }
         }
     }
@@ -7231,7 +7381,10 @@ struct UsageHeatmapView: View {
     private func heatTooltip(_ cell: UsageHeatmapDay) -> String {
         let date = fullDateText(cell.date, language: language)
         guard let usage = cell.usage, usage.tokens.visibleTotalTokens > 0 else {
-            return language.text("\(date) 无本地 token 记录", "No local token records on \(date)")
+            if trend.sourceQuality == .official {
+                return language.text("\(date) 无官方 token 记录", "No official token records on \(date)")
+            }
+            return language.text("\(date) 无本机 token 记录", "No local token records on \(date)")
         }
         let cost = usage.estimatedCostUSD > 0 ? " · \(language.text("估算", "est.")) \(formatUSD(usage.estimatedCostUSD))" : ""
         return "\(date) · \(formatTokens(usage.tokens.visibleTotalTokens)) tokens\(cost)"
@@ -8233,12 +8386,8 @@ struct TaskDetailView: View {
                     HStack(spacing: 6) {
                         TaskSourceBadge(source: item.source)
                         TaskChip(text: item.chip, kind: item.kind)
-                        if let updatedAt = item.updatedAt {
-                            Text(taskDetailDateText(updatedAt))
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
                     }
+                    taskTimingSummary
                 }
                 Spacer(minLength: 8)
                 if let target = item.codexNavigationTarget {
@@ -8294,6 +8443,7 @@ struct TaskDetailView: View {
                         systemName: "text.alignleft",
                         text: item.summary ?? language.text("暂无摘要", "No summary available")
                     )
+                    taskProgressSection
                     taskDetailSection(
                         title: language.text("最近回复", "Latest reply"),
                         systemName: "bubble.left.and.bubble.right.fill",
@@ -8318,6 +8468,89 @@ struct TaskDetailView: View {
         }
     }
 
+    @ViewBuilder
+    private var taskTimingSummary: some View {
+        if let timing = item.timing,
+           timing.createdAt != nil || timing.deadlineAt != nil {
+            VStack(alignment: .leading, spacing: 2) {
+                if let createdAt = timing.createdAt {
+                    Text(
+                        language.text("创建：", "Created: ")
+                            + taskDetailDateText(createdAt, includesTime: timing.createdHasTime, language: language)
+                    )
+                }
+                if let deadlineAt = timing.deadlineAt {
+                    Text(
+                        language.text("截止：", "Due: ")
+                            + taskDetailDateText(deadlineAt, includesTime: timing.deadlineHasTime, language: language)
+                    )
+                }
+            }
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        } else if let updatedAt = item.updatedAt {
+            Text(
+                language.text("更新：", "Updated: ")
+                    + taskDetailDateText(updatedAt, includesTime: true, language: language)
+            )
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var taskProgressSection: some View {
+        let percent = item.progress.map { min(max($0.percent, 0), 100) }
+        let progressText = percent.map { value in
+            String(format: value.rounded() == value ? "%.0f%%" : "%.1f%%", value)
+        } ?? "--"
+        let note: String
+        switch item.progress?.origin {
+        case .explicit:
+            note = language.text("来自任务记录中的真实进度", "Reported by the task record")
+        case .completedStatus:
+            note = language.text("依据已完成状态显示", "Shown from the completed status")
+        case nil:
+            note = language.text("任务记录未提供进度百分比", "No progress percentage is recorded")
+        }
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label(language.text("完成进度", "Progress"), systemImage: "chart.bar.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Text(progressText)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(percent == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(taskAccentColor(item.kind)))
+            }
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule(style: .continuous)
+                        .fill(WidgetPalette.surfaceTrack)
+                    if let percent {
+                        Capsule(style: .continuous)
+                            .fill(taskAccentColor(item.kind))
+                            .frame(width: proxy.size.width * percent / 100)
+                    }
+                }
+            }
+            .frame(height: 7)
+            Text(note)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: dashboardRowCornerRadius, style: .continuous)
+                .fill(WidgetPalette.surfaceTrack.opacity(0.55))
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(language.text("完成进度", "Progress"))
+        .accessibilityValue(progressText + "，" + note)
+    }
+
     private func taskDetailSection(title: String, systemName: String, text: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(title, systemImage: systemName)
@@ -8337,11 +8570,13 @@ struct TaskDetailView: View {
     }
 }
 
-private func taskDetailDateText(_ date: Date) -> String {
+private func taskDetailDateText(_ date: Date, includesTime: Bool, language: WidgetLanguage) -> String {
     let formatter = DateFormatter()
-    formatter.locale = Locale.current
-    formatter.dateStyle = .medium
-    formatter.timeStyle = .short
+    formatter.locale = language == .zh
+        ? Locale(identifier: "zh_CN")
+        : Locale(identifier: "en_US")
+    formatter.dateStyle = .long
+    formatter.timeStyle = includesTime ? .short : .none
     return formatter.string(from: date)
 }
 
@@ -8760,6 +8995,8 @@ private func heatmapColor(level: Int) -> Color {
 
 private func sourceQualityText(_ quality: UsageSourceQuality, language: WidgetLanguage) -> String {
     switch quality {
+    case .official:
+        return language.text("官方", "Official")
     case .detailed:
         return language.text("精细", "Detailed")
     case .approximate:
@@ -8769,6 +9006,8 @@ private func sourceQualityText(_ quality: UsageSourceQuality, language: WidgetLa
 
 private func sourceQualityDetailText(_ quality: UsageSourceQuality, language: WidgetLanguage) -> String {
     switch quality {
+    case .official:
+        return language.text("Codex App 服务端", "Codex App server")
     case .detailed:
         return language.text("事件口径", "Event source")
     case .approximate:
@@ -8778,6 +9017,8 @@ private func sourceQualityDetailText(_ quality: UsageSourceQuality, language: Wi
 
 private func usageSourceTooltip(_ quality: UsageSourceQuality, language: WidgetLanguage) -> String {
     switch quality {
+    case .official:
+        return language.text("来自 account/usage/read", "From account/usage/read")
     case .detailed:
         return language.text("来自 token_count", "From token_count")
     case .approximate:
@@ -8785,7 +9026,17 @@ private func usageSourceTooltip(_ quality: UsageSourceQuality, language: WidgetL
     }
 }
 
-private func usageSourceHelp(runtimeScope: RuntimeScope, language: WidgetLanguage) -> String {
+private func usageSourceHelp(
+    runtimeScope: RuntimeScope,
+    sourceQuality: UsageSourceQuality,
+    language: WidgetLanguage
+) -> String {
+    if runtimeScope == .codex, sourceQuality == .official {
+        return language.text(
+            "来自 Codex App account/usage/read，与个人资料 token 活动使用同一服务端日桶。",
+            "From Codex App account/usage/read, using the same server-side daily buckets as Profile token activity."
+        )
+    }
     switch runtimeScope {
     case .codex:
         return language.text(
@@ -9209,6 +9460,20 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
         object["cloudLifetimeTokens"] = cloudLifetimeTokens
     }
 
+    if let cloudUsageTrend = snapshot.cloudUsageTrend {
+        object["cloudUsageTrend"] = [
+            "sourceQuality": cloudUsageTrend.sourceQuality.rawValue,
+            "activeDayCount": cloudUsageTrend.activeDayCount,
+            "sevenDayTokens": cloudUsageTrend.summary.sevenDay.tokens.visibleTotalTokens,
+            "latestBucket": cloudUsageTrend.dayBuckets.last(where: { $0.tokens > 0 }).map { bucket in
+                ["day": bucket.id, "tokens": bucket.tokens] as [String: Any]
+            } ?? NSNull(),
+            "dailyBuckets": cloudUsageTrend.dayBuckets.filter { $0.tokens > 0 }.map { bucket in
+                ["day": bucket.id, "tokens": bucket.tokens] as [String: Any]
+            }
+        ] as [String: Any]
+    }
+
     if let local = snapshot.local {
         var localObject: [String: Any] = [
             "todayTokens": local.todayTokens,
@@ -9290,6 +9555,12 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
                             "hasSummary": item.summary != nil,
                             "hasRecentReply": item.recentReply != nil,
                             "hasNavigationTarget": item.codexNavigationTarget != nil,
+                            "createdAt": jsonValue(isoString(item.timing?.createdAt)),
+                            "createdHasTime": item.timing?.createdHasTime ?? false,
+                            "deadlineAt": jsonValue(isoString(item.timing?.deadlineAt)),
+                            "deadlineHasTime": item.timing?.deadlineHasTime ?? false,
+                            "progressPercent": jsonValue(item.progress?.percent),
+                            "progressOrigin": jsonValue(item.progress?.origin.rawValue),
                             "updatedAt": jsonValue(isoString(item.updatedAt)),
                             "tokens": jsonValue(item.tokens)
                         ] as [String: Any]

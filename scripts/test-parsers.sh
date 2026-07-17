@@ -35,7 +35,7 @@ while IFS= read -r line; do
       printf '%s\n' '{"id":3,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":12,"windowDurationMins":10080,"resetsAt":1784785418},"secondary":null,"credits":{"hasCredits":false,"unlimited":false,"balance":"0"}}}}'
       ;;
     4)
-      printf '%s\n' '{"id":4,"result":{"summary":{"lifetimeTokens":123456789,"peakDailyTokens":23456789},"dailyUsageBuckets":[]}}'
+      printf '%s\n' '{"id":4,"result":{"summary":{"lifetimeTokens":123456789,"peakDailyTokens":457746130},"dailyUsageBuckets":[{"startDate":"2026-07-15","tokens":120000000},{"startDate":"2026-07-16","tokens":457746130}]}}'
       ;;
   esac
 done
@@ -89,6 +89,8 @@ CODEX_DETAILED_TOTAL="$(
 test "$CODEX_DETAILED_TOTAL" = "1630"
 test "$(jq -r '.runtimes[] | select(.scope == "codex") | .snapshot.cloudLifetimeTokens' "$CODEX_OUTPUT")" = "123456789"
 test "$(jq -r '.compat.codex.cloudLifetimeTokens' "$CODEX_OUTPUT")" = "123456789"
+test "$(jq -r '.runtimes[] | select(.scope == "codex") | .snapshot.cloudUsageTrend.latestBucket.tokens' "$CODEX_OUTPUT")" = "457746130"
+test "$(jq -r '.runtimes[] | select(.scope == "codex") | .snapshot.cloudUsageTrend.sourceQuality' "$CODEX_OUTPUT")" = "official"
 grep -q '"tokenEventCount" : 3' "$CODEX_OUTPUT"
 
 SESSIONS_DIR="$TMP_DIR/.openclaw/agents/main/sessions"
@@ -113,13 +115,26 @@ printf '%s\n' '{
 printf '%s\n' '[
   {
     "id": "task-fixture-1",
-    "created": "2026-07-15T01:00:00.000Z",
-    "description": "Parser fixture task summary",
+    "created": "2026-07-15 09:30",
+    "deadline": "2026-07-31",
+    "description": "根因: 根因:Parser fixture task summary\n如何: Verify structured extraction",
     "details": "Verify OpenClaw task attribution",
+    "progress_percent": 42,
     "priority": "high",
     "source": "local",
     "status": "in_progress",
     "title": "OpenClaw parser fixture"
+  },
+  {
+    "id": "task-fixture-stale",
+    "created": "2026-06-01 09:00",
+    "updatedAt": "2027-01-01T00:00:00Z",
+    "deadline": "2026-12-31",
+    "description": "A stale task with a future deadline",
+    "priority": "high",
+    "source": "local",
+    "status": "in_progress",
+    "title": "Stale OpenClaw parser fixture"
   }
 ]' > "$TASKS_DIR/tasks.json"
 
@@ -135,6 +150,23 @@ grep -q '"name" : "Read"' "$OUTPUT"
 grep -q '"visibleTotalTokens" : 1900' "$OUTPUT"
 grep -q '"source" : "openclaw"' "$OUTPUT"
 grep -q '"hasSummary" : true' "$OUTPUT"
+jq -e '
+  [.runtimes[] | select(.scope == "openClaw") | .snapshot.taskBoard.columns[].items[]
+    | select(.id == "openclaw-task-task-fixture-1")][0]
+  | .createdAt != null
+    and .updatedAt == .createdAt
+    and .createdHasTime == true
+    and .deadlineAt != null
+    and .deadlineHasTime == false
+    and .progressPercent == 42
+    and .progressOrigin == "explicit"
+' "$OUTPUT" >/dev/null
+jq -e '
+  [.runtimes[] | select(.scope == "openClaw") | .snapshot.taskBoard.columns[]
+    | select(.id == "active") | .items[].id] as $ids
+  | ($ids | index("openclaw-task-task-fixture-1"))
+      < ($ids | index("openclaw-task-task-fixture-stale"))
+' "$OUTPUT" >/dev/null
 
 CACHE_FILE="$CACHE_DIR/openclaw/session-usage-v1.json"
 grep -q '"version":1' "$CACHE_FILE"

@@ -18,6 +18,7 @@ struct AgentUsageAggregator {
             sevenDayQuota: nil,
             credits: nil,
             cloudLifetimeTokens: nil,
+            cloudUsageTrend: nil,
             local: local,
             taskBoard: mergeTaskBoards(runtimes.compactMap { $0.snapshot.taskBoard }, at: refreshedAt),
             messages: messages

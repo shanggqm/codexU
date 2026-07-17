@@ -119,6 +119,8 @@ enum TaskNavigationSelfTest {
             source: source,
             summary: nil,
             recentReply: nil,
+            timing: nil,
+            progress: nil,
             navigationTarget: navigationTarget
         )
     }
