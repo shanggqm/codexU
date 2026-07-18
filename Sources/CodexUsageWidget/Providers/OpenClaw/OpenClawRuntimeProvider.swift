@@ -21,6 +21,7 @@ struct OpenClawRuntimeProvider: RuntimeUsageProvider {
             sevenDayQuota: nil,
             credits: nil,
             cloudLifetimeTokens: nil,
+            cloudPeakDailyTokens: nil,
             cloudUsageTrend: nil,
             local: local,
             taskBoard: taskBoard,

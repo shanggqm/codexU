@@ -37,4 +37,26 @@ enum TokenFormatter {
             units[unitIndex].suffix
         )
     }
+
+    static func formatProfile(_ value: Int64?, isChinese: Bool) -> String {
+        guard isChinese else { return format(value) }
+        guard let value else { return "--" }
+
+        let magnitude = abs(Double(value))
+        if magnitude >= 100_000_000 {
+            return String(
+                format: "%.1f亿",
+                locale: Locale(identifier: "zh_CN"),
+                Double(value) / 100_000_000
+            )
+        }
+        if magnitude >= 10_000 {
+            return String(
+                format: "%.1f万",
+                locale: Locale(identifier: "zh_CN"),
+                Double(value) / 10_000
+            )
+        }
+        return "\(value)"
+    }
 }

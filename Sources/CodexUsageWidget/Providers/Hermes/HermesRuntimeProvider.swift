@@ -22,6 +22,7 @@ struct HermesRuntimeProvider: RuntimeUsageProvider {
             sevenDayQuota: nil,
             credits: nil,
             cloudLifetimeTokens: nil,
+            cloudPeakDailyTokens: nil,
             cloudUsageTrend: nil,
             local: result.local,
             taskBoard: result.taskBoard,

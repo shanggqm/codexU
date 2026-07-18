@@ -199,6 +199,7 @@ enum CodexRateLimitNormalizerSelfTest {
                 sevenDayQuota: sevenDay,
                 credits: nil,
                 cloudLifetimeTokens: nil,
+                cloudPeakDailyTokens: nil,
                 cloudUsageTrend: nil,
                 local: nil,
                 taskBoard: nil,

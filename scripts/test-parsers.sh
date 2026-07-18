@@ -88,8 +88,11 @@ CODEX_DETAILED_TOTAL="$(
 )"
 test "$CODEX_DETAILED_TOTAL" = "1630"
 test "$(jq -r '.runtimes[] | select(.scope == "codex") | .snapshot.cloudLifetimeTokens' "$CODEX_OUTPUT")" = "123456789"
+test "$(jq -r '.runtimes[] | select(.scope == "codex") | .snapshot.cloudPeakDailyTokens' "$CODEX_OUTPUT")" = "457746130"
 test "$(jq -r '.compat.codex.cloudLifetimeTokens' "$CODEX_OUTPUT")" = "123456789"
+test "$(jq -r '.compat.codex.cloudPeakDailyTokens' "$CODEX_OUTPUT")" = "457746130"
 test "$(jq -r '.runtimes[] | select(.scope == "codex") | .snapshot.cloudUsageTrend.latestBucket.tokens' "$CODEX_OUTPUT")" = "457746130"
+test "$(jq -r '.runtimes[] | select(.scope == "codex") | .snapshot.cloudUsageTrend.peakBucket.tokens' "$CODEX_OUTPUT")" = "457746130"
 test "$(jq -r '.runtimes[] | select(.scope == "codex") | .snapshot.cloudUsageTrend.sourceQuality' "$CODEX_OUTPUT")" = "official"
 grep -q '"tokenEventCount" : 3' "$CODEX_OUTPUT"
 

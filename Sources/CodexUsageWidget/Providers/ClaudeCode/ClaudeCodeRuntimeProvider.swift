@@ -27,6 +27,7 @@ struct ClaudeCodeRuntimeProvider: RuntimeUsageProvider {
             sevenDayQuota: statusLine.secondary,
             credits: nil,
             cloudLifetimeTokens: nil,
+            cloudPeakDailyTokens: nil,
             cloudUsageTrend: nil,
             local: local,
             taskBoard: taskBoard,

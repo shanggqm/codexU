@@ -295,6 +295,7 @@ struct UsageSnapshot: Equatable {
     let sevenDayQuota: RateWindow?
     let credits: CreditsInfo?
     let cloudLifetimeTokens: Int64?
+    let cloudPeakDailyTokens: Int64?
     let cloudUsageTrend: UsageTrend?
     let local: LocalUsage?
     let taskBoard: TaskBoard?
@@ -310,6 +311,7 @@ struct UsageSnapshot: Equatable {
         sevenDayQuota: nil,
         credits: nil,
         cloudLifetimeTokens: nil,
+        cloudPeakDailyTokens: nil,
         cloudUsageTrend: nil,
         local: nil,
         taskBoard: nil,
@@ -327,6 +329,7 @@ struct UsageSnapshot: Equatable {
             sevenDayQuota: sevenDayQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
+            cloudPeakDailyTokens: cloudPeakDailyTokens,
             cloudUsageTrend: cloudUsageTrend,
             local: local,
             taskBoard: taskBoard,
@@ -345,6 +348,7 @@ struct UsageSnapshot: Equatable {
             sevenDayQuota: sevenDayQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
+            cloudPeakDailyTokens: cloudPeakDailyTokens,
             cloudUsageTrend: cloudUsageTrend,
             local: local,
             taskBoard: taskBoard,
@@ -367,6 +371,7 @@ struct UsageSnapshot: Equatable {
             sevenDayQuota: sevenDayQuota,
             credits: credits,
             cloudLifetimeTokens: cloudLifetimeTokens,
+            cloudPeakDailyTokens: cloudPeakDailyTokens,
             cloudUsageTrend: cloudUsageTrend,
             local: local,
             taskBoard: taskBoard,
@@ -1025,6 +1030,7 @@ final class CodexUsageReader {
             sevenDayQuota: appServer.sevenDayQuota,
             credits: appServer.credits,
             cloudLifetimeTokens: appServer.cloudLifetimeTokens,
+            cloudPeakDailyTokens: appServer.cloudPeakDailyTokens,
             cloudUsageTrend: cloudUsageTrend,
             local: local,
             taskBoard: taskBoard,
@@ -1047,6 +1053,7 @@ final class CodexUsageReader {
         var rateLimitDiagnostics: [String] = []
         var credits: CreditsInfo?
         var cloudLifetimeTokens: Int64?
+        var cloudPeakDailyTokens: Int64?
         var cloudDailyUsageBuckets: [DailyTokenBucket] = []
     }
 
@@ -1143,6 +1150,7 @@ final class CodexUsageReader {
                 parseRateLimits(result, into: &snapshot)
             case 4:
                 snapshot.cloudLifetimeTokens = parseCloudLifetimeTokens(result)
+                snapshot.cloudPeakDailyTokens = parseCloudPeakDailyTokens(result)
                 snapshot.cloudDailyUsageBuckets = parseCloudDailyUsageBuckets(result)
             default:
                 break
@@ -1330,6 +1338,11 @@ final class CodexUsageReader {
     private func parseCloudLifetimeTokens(_ result: [String: Any]) -> Int64? {
         guard let summary = result["summary"] as? [String: Any] else { return nil }
         return int64Value(summary["lifetimeTokens"])
+    }
+
+    private func parseCloudPeakDailyTokens(_ result: [String: Any]) -> Int64? {
+        guard let summary = result["summary"] as? [String: Any] else { return nil }
+        return int64Value(summary["peakDailyTokens"])
     }
 
     private func parseCloudDailyUsageBuckets(_ result: [String: Any]) -> [DailyTokenBucket] {
@@ -3614,6 +3627,7 @@ struct UsageWidgetView: View {
                 if store.selectedRuntimeScope == .codex {
                     CodexOfficialUsageStrip(
                         lifetimeTokens: snapshot.cloudLifetimeTokens,
+                        peakDailyTokens: snapshot.cloudPeakDailyTokens,
                         trend: snapshot.cloudUsageTrend,
                         language: language
                     )
@@ -6462,19 +6476,28 @@ struct DetailedTokenMetricCard: View {
 
 struct CodexOfficialUsageStrip: View {
     let lifetimeTokens: Int64?
+    let peakDailyTokens: Int64?
     let trend: UsageTrend?
     let language: WidgetLanguage
 
     @Environment(\.colorScheme) private var colorScheme
 
     private var sourceLabel: String {
-        lifetimeTokens == nil && trend == nil
+        lifetimeTokens == nil && peakDailyTokens == nil && trend == nil
             ? language.text("暂不可用", "Unavailable")
-            : language.text("服务端汇总", "Server summary")
+            : language.text("个人资料口径", "Profile metric")
     }
 
     private var latestBucket: UsageDayBucket? {
         trend?.dayBuckets.last(where: { $0.tokens > 0 })
+    }
+
+    private var peakBucket: UsageDayBucket? {
+        trend?.dayBuckets.filter { $0.tokens > 0 }.max { $0.tokens < $1.tokens }
+    }
+
+    private var resolvedPeakDailyTokens: Int64? {
+        peakDailyTokens ?? peakBucket?.tokens
     }
 
     var body: some View {
@@ -6500,6 +6523,19 @@ struct CodexOfficialUsageStrip: View {
 
             HStack(spacing: 0) {
                 officialMetric(
+                    title: language.text("累计 Token 数", "Total tokens"),
+                    tokens: lifetimeTokens
+                )
+                Divider().frame(height: 30)
+                officialMetric(
+                    title: language.text("峰值 Token 数", "Peak tokens"),
+                    tokens: resolvedPeakDailyTokens,
+                    help: peakBucket.map {
+                        language.text("峰值日期：\(shortDate($0.date))", "Peak date: \(shortDate($0.date))")
+                    }
+                )
+                Divider().frame(height: 30)
+                officialMetric(
                     title: latestBucket.map {
                         language.text("最近一天 \(shortDate($0.date))", "Latest \(shortDate($0.date))")
                     } ?? language.text("最近一天", "Latest day"),
@@ -6509,11 +6545,6 @@ struct CodexOfficialUsageStrip: View {
                 officialMetric(
                     title: language.text("近 7 天", "Last 7 days"),
                     tokens: trend?.summary.sevenDay.tokens.visibleTotalTokens
-                )
-                Divider().frame(height: 30)
-                officialMetric(
-                    title: language.text("累计", "Lifetime"),
-                    tokens: lifetimeTokens
                 )
             }
         }
@@ -6534,19 +6565,20 @@ struct CodexOfficialUsageStrip: View {
         ))
     }
 
-    private func officialMetric(title: String, tokens: Int64?) -> some View {
+    private func officialMetric(title: String, tokens: Int64?, help: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            Text(formatTokens(tokens))
+            Text(TokenFormatter.formatProfile(tokens, isChinese: language.isChinese))
                 .font(.system(size: 15, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
+        .help(help ?? title)
     }
 
     private func shortDate(_ date: Date) -> String {
@@ -9460,12 +9492,19 @@ private func dumpJSON(_ snapshot: UsageSnapshot) {
         object["cloudLifetimeTokens"] = cloudLifetimeTokens
     }
 
+    if let cloudPeakDailyTokens = snapshot.cloudPeakDailyTokens {
+        object["cloudPeakDailyTokens"] = cloudPeakDailyTokens
+    }
+
     if let cloudUsageTrend = snapshot.cloudUsageTrend {
         object["cloudUsageTrend"] = [
             "sourceQuality": cloudUsageTrend.sourceQuality.rawValue,
             "activeDayCount": cloudUsageTrend.activeDayCount,
             "sevenDayTokens": cloudUsageTrend.summary.sevenDay.tokens.visibleTotalTokens,
             "latestBucket": cloudUsageTrend.dayBuckets.last(where: { $0.tokens > 0 }).map { bucket in
+                ["day": bucket.id, "tokens": bucket.tokens] as [String: Any]
+            } ?? NSNull(),
+            "peakBucket": cloudUsageTrend.dayBuckets.filter { $0.tokens > 0 }.max(by: { $0.tokens < $1.tokens }).map { bucket in
                 ["day": bucket.id, "tokens": bucket.tokens] as [String: Any]
             } ?? NSNull(),
             "dailyBuckets": cloudUsageTrend.dayBuckets.filter { $0.tokens > 0 }.map { bucket in

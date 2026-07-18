@@ -74,6 +74,10 @@ private func runtimeLegacyJSONObject(_ snapshot: UsageSnapshot) -> [String: Any]
         object["cloudLifetimeTokens"] = cloudLifetimeTokens
     }
 
+    if let cloudPeakDailyTokens = snapshot.cloudPeakDailyTokens {
+        object["cloudPeakDailyTokens"] = cloudPeakDailyTokens
+    }
+
     if let cloudUsageTrend = snapshot.cloudUsageTrend {
         object["cloudUsageTrend"] = runtimeJSONObject(cloudUsageTrend)
     }
@@ -214,6 +218,9 @@ private func runtimeJSONObject(_ trend: UsageTrend) -> [String: Any] {
         "activeDayCount": trend.activeDayCount,
         "sevenDayTokens": trend.summary.sevenDay.tokens.visibleTotalTokens,
         "latestBucket": trend.dayBuckets.last(where: { $0.tokens > 0 }).map { bucket in
+            ["day": bucket.id, "tokens": bucket.tokens] as [String: Any]
+        } ?? NSNull(),
+        "peakBucket": trend.dayBuckets.filter { $0.tokens > 0 }.max(by: { $0.tokens < $1.tokens }).map { bucket in
             ["day": bucket.id, "tokens": bucket.tokens] as [String: Any]
         } ?? NSNull(),
         "dailyBuckets": trend.dayBuckets.filter { $0.tokens > 0 }.map { bucket in

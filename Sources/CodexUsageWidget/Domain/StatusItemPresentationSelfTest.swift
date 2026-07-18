@@ -18,6 +18,22 @@ enum StatusItemPresentationSelfTest {
         expect(TokenFormatter.format(999_999_999) == "1.0B", "rounded M boundary should promote to B")
         expect(TokenFormatter.format(1_234_567_890) == "1.2B", "billions should use B")
         expect(TokenFormatter.format(-1_234_567) == "-1.2M", "negative values should preserve their sign")
+        expect(
+            TokenFormatter.formatProfile(2_964_716_296, isChinese: true) == "29.6亿",
+            "Chinese Profile totals should use the same 100-million unit as ChatGPT Profile"
+        )
+        expect(
+            TokenFormatter.formatProfile(1_240_624_629, isChinese: true) == "12.4亿",
+            "Chinese Profile peaks should use the same 100-million unit as ChatGPT Profile"
+        )
+        expect(
+            TokenFormatter.formatProfile(313_597_618, isChinese: true) == "3.1亿",
+            "Chinese Profile daily values should stay in the same unit family"
+        )
+        expect(
+            TokenFormatter.formatProfile(2_964_716_296, isChinese: false) == "3.0B",
+            "English Profile values should keep the standard compact format"
+        )
 
         let suiteName = "codexU.status-item-self-test.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
