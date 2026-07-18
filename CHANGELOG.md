@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.1.4 - 2026-07-18
+
+- Matched the Chinese Codex official-usage presentation to ChatGPT Profile by formatting official totals in `亿` units.
+- Added the official lifetime and peak-daily token metrics with the same labels and server fields used by Profile.
+- Kept latest-day and last-7-days official values as supporting metrics, using the same localized unit family.
+- Added `cloudPeakDailyTokens` and an explicit official `peakBucket` to JSON diagnostics and regression coverage.
+
 ## 1.1.3 - 2026-07-17
 
 - Switched Codex headline cards and usage trends to the official daily token buckets returned by the Codex App `account/usage/read` service, matching the token-activity source shown in ChatGPT Profile.

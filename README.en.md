@@ -17,6 +17,14 @@ codexU is a macOS menu bar and desktop app for tracking Codex quota, separate Co
 
 ![codexU v1.1.0 Runtime menu](docs/screenshot-v1.1.0-runtime-menu.png)
 
+## v1.1.4 Profile-Matched Metrics
+
+v1.1.4 aligns the Codex official-usage presentation with ChatGPT Profile. Official lifetime and peak-day values come directly from `account/usage/read` fields `lifetimeTokens` and `peakDailyTokens`. In Chinese, all official values use the same `亿` (100-million) unit family as Profile. Latest-day and last-7-days values remain available as supporting official metrics.
+
+For the verified server snapshot, the aligned display is: lifetime `29.6亿`, peak `12.4亿`, latest day `3.1亿`, and last 7 days `27.1亿`. Peak usage is not estimated from local logs; it is returned by the Codex App service and cross-checked against the official daily buckets.
+
+![codexU v1.1.4 official metrics aligned with ChatGPT Profile](docs/screenshot-v1.1.4-profile-metric.png)
+
 ## v1.1.3 Official Daily Usage and Task Fixes
 
 v1.1.3 uses the Codex App `account/usage/read` server-side daily buckets for Latest day, Last 7 days, Lifetime, and the usage trend. This is the same source used by the token-activity view in ChatGPT Profile. Local `token_count` events include cached context processing and remain useful for input/cache/output splits and project attribution, but they are now explicitly labeled “Local raw context (not official usage)” and are no longer presented as directly comparable to Profile.
@@ -167,10 +175,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-1.1.3-mac-arm64.dmg
-dist/codexU-1.1.3-mac-arm64.dmg.sha256
-dist/codexU-1.1.3-mac-x86_64.dmg
-dist/codexU-1.1.3-mac-x86_64.dmg.sha256
+dist/codexU-1.1.4-mac-arm64.dmg
+dist/codexU-1.1.4-mac-arm64.dmg.sha256
+dist/codexU-1.1.4-mac-x86_64.dmg
+dist/codexU-1.1.4-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).

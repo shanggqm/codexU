@@ -21,6 +21,14 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 Codex 额度、Co
 
 ![codexU v1.1.0 菜单栏 Runtime 状态](docs/screenshot-v1.1.0-runtime-menu.png)
 
+## v1.1.4 与个人资料同口径显示
+
+v1.1.4 将 Codex 官方区域的中文计数方式与 ChatGPT 个人资料对齐：官方累计和官方单日峰值直接读取 `account/usage/read` 的 `lifetimeTokens` 与 `peakDailyTokens`，中文统一按“亿”显示。最近一天和近 7 天继续保留为辅助指标，也使用相同单位体系。
+
+同一份服务端数据现在显示为：累计 `29.6亿`、峰值 `12.4亿`、最近一天 `3.1亿`、近 7 天 `27.1亿`。其中峰值不是本机日志推算，而是 Codex App 官方接口直接返回；每日桶最大值同时用于交叉验证。
+
+![codexU v1.1.4 与 ChatGPT 个人资料同口径的官方 Token 统计](docs/screenshot-v1.1.4-profile-metric.png)
+
 ## v1.1.3 官方日统计与任务修复
 
 v1.1.3 直接使用 Codex App `account/usage/read` 的服务端日桶展示“最近一天 / 近 7 天 / 累计”，用量趋势也切换到同一官方来源。它对应 ChatGPT 个人资料里的 token activity；本机 `token_count` 包含缓存上下文处理量，继续用于输入、缓存、输出和项目归因，但明确标为“本机原始上下文（非官方用量）”，不再拿它和个人资料数字直接比较。
@@ -186,10 +194,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-1.1.3-mac-arm64.dmg
-dist/codexU-1.1.3-mac-arm64.dmg.sha256
-dist/codexU-1.1.3-mac-x86_64.dmg
-dist/codexU-1.1.3-mac-x86_64.dmg.sha256
+dist/codexU-1.1.4-mac-arm64.dmg
+dist/codexU-1.1.4-mac-arm64.dmg.sha256
+dist/codexU-1.1.4-mac-x86_64.dmg
+dist/codexU-1.1.4-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。
