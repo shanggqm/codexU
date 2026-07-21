@@ -142,7 +142,8 @@ private struct LeadershipPyramidGraphic: View {
 
     var body: some View {
         Canvas { context, size in
-            let tierCount = 8
+            let tierCount = 7
+            let visualLevel = min(max(currentLevel, 0), tierCount)
             let centerX = size.width / 2 - 3
             let bottomY = size.height - 3
             let baseHalfWidth = max(30, (size.width - 24) / 2)
@@ -153,8 +154,8 @@ private struct LeadershipPyramidGraphic: View {
                 let tierBottom = bottomY - CGFloat(tier) * 8.6
                 let tierTop = tierBottom - 6.2
                 let depth: CGFloat = 4.2
-                let earned = level <= currentLevel
-                let current = level == currentLevel
+                let earned = level <= visualLevel
+                let current = level == visualLevel
                 let baseColor = current
                     ? visualTokens.accent.primaryStrong.color
                     : earned

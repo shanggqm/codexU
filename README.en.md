@@ -3,7 +3,7 @@
 > [!IMPORTANT]
 > **Upgrade to v1.1.5 or later.** v1.1.5 fixes inherited token history being counted again after branching an existing Codex conversation. Forked conversations now count only usage added after the branch point. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
 
-codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT Codex and Claude Code quota, token usage, and today's task status. It keeps the information you check most in the menu bar and main window, so you can quickly see remaining quota, reset times, and daily work progress.
+codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT Codex and Claude Code quota, token usage, today's tasks, and local AI leadership. It keeps the information you check most in the menu bar and main window, so you can quickly see remaining quota, reset times, daily progress, and how much AI labor one person is directing.
 
 ![codexU v1.1.0 palette gallery, settings, and main window](docs/screenshot-v1.1.0-palette-gallery.png)
 
@@ -31,7 +31,8 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - Supports Claude Code local transcript usage, 7-day trends, project rankings, top tools/Skills, and a basic task board.
 - Summarizes token usage for today, the last 7 days, and lifetime totals with uncached input, cached input, and output splits.
 - Estimates the current month's API-equivalent value from OpenAI API token prices and shows progress against Plus, Pro 100, Pro 200, and the full monthly quota value. The bar uses a segmented nonlinear scale, so movement past Pro 200 remains visible and is not a linear dollar ratio.
-- Adds lower dashboard tabs for today's tasks, usage trend, project ranking, and Skill usage.
+- Adds a 2.5D pyramid beside the quota rings for the rolling 28-day AI leadership score and Chinese title, plus today's agent count and AI hours using `person.3.fill` and `clock.fill`; quota and usage remain the primary focus.
+- Adds lower dashboard tabs for today's tasks, AI leadership, usage trend, project ranking, and Skill usage. Leadership details support Today / 7 days / 28 days and All / Codex / Claude Code filters, with span, leverage, orchestration, autonomy, concurrency, and project contribution views.
 - Organizes today's tasks according to each factual source: Codex uses Recent, To continue, Scheduled, and Archived today; Claude Code uses explicit local task states for Active, Pending, Planned, and Completed. Recent activity and archival are not presented as proof of running or success.
 - Task cards prioritize title, workspace, factual time, and trusted state. Automations show the next run only when it can be determined, and only cards with a valid session deep link expose whole-card click, hover, pointer, and keyboard-focus feedback.
 - Shows a six-month daily token heatmap, a last-7-day trend summary, and previous-period comparison.
@@ -149,6 +150,7 @@ For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md
 - Usage trends and project rankings: aggregated from local session `token_count` events, with an approximate thread-updated-time fallback when detailed events are unavailable.
 - Tool and Skill usage: tool call and Skill load records parsed from local session events.
 - Scheduled tasks: enabled automation metadata under `~/.codex/automations/**/automation.toml`. The next run is computed locally only when cadence, timezone, and time are sufficiently explicit.
+- AI leadership: Codex reads only local thread relationships and structural `task_started` / `task_complete` events; Claude Code reads only `turn_duration` and subagent lifecycles. ScoreModel v1.3 scores only factual or derived intervals across span, leverage, orchestration, and autonomy. Estimated intervals are excluded, while evidence confidence is shown separately and does not multiply the score.
 - Claude Code historical tokens: assistant `message.usage` fields in `~/.claude/projects/**/*.jsonl`.
 - Claude Code tools, Skills, and tasks: transcript `tool_use.name` / explicit Skill attribution, plus `~/.claude/tasks/**/*.json`. When a Skill path is absent, codexU infers it from Claude Code's current personal, project, nested, plugin, and legacy-command locations; unresolved history is shown as “not located.”
 - Claude Code active quota: optional `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`; without it, 5-hour and 7-day quota show `--`.
