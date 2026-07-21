@@ -52,8 +52,9 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 - 以标准 macOS 窗口运行，主窗口默认保持紧凑布局，也可在 820–1280pt 范围内调整宽度；增加宽度不会改变卡片顺序和信息结构，并会恢复上次窗口尺寸。支持 Dock、系统窗口控制、最小化和关闭主窗口后继续后台运行，关闭主窗口会隐藏 Dock 图标并保留菜单栏图标。
 - 默认使用 `Command + U` 显示或隐藏主窗口，并可在设置中自定义；菜单栏 Runtime 菜单也可以快速打开主窗口、设置或退出。
 - 设置窗口支持中文/英文界面、自动/浅色/深色外观、状态栏内容与实时预览、主窗口置顶、关闭行为、系统状态和更新检查配置。
+- 支持用户主动配置HTTPS WebDAV，在多台Mac之间同步codexU界面与显示设置；密码仅保存在macOS钥匙串。
 - 默认自动检查 GitHub Release 新版本并接收 beta 版本，发现新版时提供匹配当前 Mac 架构的 DMG 下载入口；不会静默下载安装，自动检查可关闭。
-- 本地读取数据，不上传 usage、线程或账户数据到第三方服务。
+- usage、线程、日志、Skill、本机路径和账户数据始终只在本机读取，不会进入WebDAV同步文件。
 
 ## 羊毛进度
 
@@ -78,7 +79,7 @@ API 等效价值 =
 - 应用会检测其他应用的独占快捷键注册冲突；macOS 不提供非独占注册的完整查询能力，如仍与其他应用冲突，请改用其他组合。
 - 菜单栏仪表图标：点击后打开 Runtime 菜单；点击 Codex 或 Claude Code 卡片会打开主界面并切到对应 Runtime。
 - 菜单栏 Runtime 菜单：展示 Codex / Claude Code 快速状态，并提供打开主窗口、打开设置和退出。
-- 设置窗口：配置语言、外观、状态栏展示模式/额度口径/可见指标、主窗口置顶及关闭行为，并在系统区控制自动检查、查看状态或手动检查 GitHub Release 更新。
+- 设置窗口：配置语言、外观、状态栏展示模式/额度口径/可见指标、主窗口置顶及关闭行为；可以在WebDAV区同步codexU配置，并在系统区控制更新检查。
 - 主窗口顶部刷新按钮：立即刷新额度、token 统计、趋势图和任务看板。
 - 系统红黄绿窗口按钮：关闭、最小化或缩放主窗口；关闭后可通过菜单栏图标或快捷键唤回，退出请使用菜单栏 Runtime 菜单或 App 菜单。
 
@@ -94,6 +95,8 @@ codexU 目前通过 GitHub Release 的 DMG 安装包分发，不经过 Mac App S
 也可以在 Finder 中右键点击 `codexU.app`，选择 **打开**，再确认系统安全提示。
 
 codexU 需要读取本机 `~/.codex/` 下的 Codex 数据；如果启用 Claude Code 统计，还会读取 `~/.claude/` 下的本机 transcript、任务和状态缓存。如果 macOS 弹出文件或文件夹访问授权，请允许访问，否则小组件无法读取本机 usage、线程和自动化任务信息。
+
+WebDAV同步默认关闭。启用后，codexU只会向用户填写的HTTPS WebDAV地址上传语言、外观、Runtime展示范围、统计时区、状态栏、窗口行为和更新检查偏好。同步文件不包含Codex数据库、线程、日志、Skill、快捷键、账户信息、本机路径或WebDAV凭据；密码只保存在macOS钥匙串。下载云端配置前，当前本地配置会备份到`~/Library/Application Support/codexU/Configuration Backups/`。
 
 ## 安装
 
@@ -180,6 +183,7 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 - Claude Code 工具、Skill 和任务：transcript 中的 `tool_use.name` / 显式 Skill attribution，以及 `~/.claude/tasks/**/*.json`；Skill 路径缺失时按 Claude Code 的个人、项目、嵌套、插件和旧版 command 路径在当前文件系统中回退推断，无法确认时显示“当前未定位”。
 - Claude Code active 额度：可选读取 `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`；缺失时 5 小时/7 日额度显示为 `--`。
 - 更新检测：默认访问 GitHub Releases API，读取 `shanggqm/codexU` 的公开 release 元数据，并把检查结果缓存到 `~/Library/Caches/codexU/update-check.json`。
+- 可选WebDAV同步：仅在用户配置并主动操作或开启自动同步后，向用户指定的HTTPS WebDAV服务器读写`codexu-config.json`。
 
 当前 Codex 额度 API 暴露的是滚动窗口百分比和重置时间，不暴露绝对配额数量；Claude Code 首版只读取本地历史记录和可选 active snapshot，不代表 Claude.ai 官方账单。更完整的数据口径和回退策略见 [RESEARCH.md](RESEARCH.md)。
 

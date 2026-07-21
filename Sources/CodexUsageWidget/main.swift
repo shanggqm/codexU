@@ -3401,7 +3401,7 @@ private func dateFromEpoch(_ value: Any?) -> Date? {
     return Date(timeIntervalSince1970: seconds)
 }
 
-enum WidgetLanguage: String, CaseIterable, Equatable {
+enum WidgetLanguage: String, CaseIterable, Codable, Equatable {
     case zh
     case en
 
@@ -3439,7 +3439,7 @@ enum WidgetLanguage: String, CaseIterable, Equatable {
     }
 }
 
-enum WidgetThemeMode: String, CaseIterable, Equatable {
+enum WidgetThemeMode: String, CaseIterable, Codable, Equatable {
     case system
     case light
     case dark
@@ -3686,6 +3686,38 @@ final class AppSettings: ObservableObject {
     func resetStatusItemPreferences() {
         StatusItemPreferencesStore.reset(defaults: defaults)
         statusItemPreferences = .default
+    }
+
+    func syncedConfiguration(
+        statisticsTimeZone: StatisticsTimeZonePreference
+    ) -> SyncedCodexUConfiguration {
+        SyncedCodexUConfiguration(
+            language: language,
+            themeMode: themeMode,
+            visibleRuntimeScopes: visibleRuntimeScopes,
+            statisticsTimeZone: statisticsTimeZone,
+            statusItem: SyncedStatusItemConfiguration(statusItemPreferences),
+            keepMainWindowOnTop: keepMainWindowOnTop,
+            keepRunningWhenMainWindowClosed: keepRunningWhenMainWindowClosed,
+            automaticUpdateChecksEnabled: automaticUpdateChecksEnabled
+        )
+    }
+
+    @discardableResult
+    func applySyncedConfiguration(_ configuration: SyncedCodexUConfiguration) -> Bool {
+        let scopes = Self.orderedRuntimeScopes(Set(configuration.visibleRuntimeScopes))
+        let statusPreferences = configuration.statusItem.preferences
+        guard !scopes.isEmpty, statusPreferences.validationError() == nil else { return false }
+
+        language = configuration.language
+        themeMode = configuration.themeMode
+        visibleRuntimeScopes = scopes
+        statusItemPreferences = statusPreferences
+        StatusItemPreferencesStore.save(statusPreferences, defaults: defaults)
+        keepMainWindowOnTop = configuration.keepMainWindowOnTop
+        keepRunningWhenMainWindowClosed = configuration.keepRunningWhenMainWindowClosed
+        automaticUpdateChecksEnabled = configuration.automaticUpdateChecksEnabled
+        return true
     }
 
     @discardableResult
@@ -4442,253 +4474,317 @@ struct TitlebarToolbarView: View {
     }
 }
 
+private enum SettingsCategory: String, CaseIterable, Identifiable {
+    case general
+    case statistics
+    case menuBar
+    case window
+    case webDAV
+    case system
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .general: return "slider.horizontal.3"
+        case .statistics: return "calendar.badge.clock"
+        case .menuBar: return "menubar.rectangle"
+        case .window: return "macwindow"
+        case .webDAV: return "cloud"
+        case .system: return "gearshape"
+        }
+    }
+
+    func title(language: WidgetLanguage) -> String {
+        switch self {
+        case .general: return language.text("通用", "General")
+        case .statistics: return language.text("数据与统计", "Data & Statistics")
+        case .menuBar: return language.text("状态栏", "Menu Bar")
+        case .window: return language.text("窗口与快捷键", "Window & Shortcut")
+        case .webDAV: return language.text("WebDAV同步", "WebDAV Sync")
+        case .system: return language.text("系统", "System")
+        }
+    }
+
+    func detail(language: WidgetLanguage) -> String {
+        switch self {
+        case .general: return language.text("界面、外观与Runtime", "Interface, appearance, and runtimes")
+        case .statistics: return language.text("自然日统计口径", "Calendar-day statistics")
+        case .menuBar: return language.text("内容、额度口径与显示密度", "Content, quota direction, and density")
+        case .window: return language.text("主窗口行为与全局快捷键", "Main-window behavior and global shortcut")
+        case .webDAV: return language.text("在设备间同步codexU配置", "Sync codexU settings across devices")
+        case .system: return language.text("Runtime状态与更新检查", "Runtime status and update checks")
+        }
+    }
+}
+
 struct SettingsPanelView: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var store: UsageStore
     @ObservedObject var updateStore: AppUpdateStore
     let onOpenPaletteLibrary: () -> Void
+    @ObservedObject var webDAVSyncStore: WebDAVSyncStore
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.visualTokens) private var visualTokens
+    @State private var selectedCategory: SettingsCategory = .general
 
     private var language: WidgetLanguage { settings.language }
 
     var body: some View {
-        ZStack {
-            LiquidGlassWindowBackdrop(colorScheme: colorScheme)
-
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 16) {
-                settingsHeader
-                settingsSection(
-                    title: language.text("通用", "General"),
-                    detail: language.text("界面偏好", "Interface")
-                ) {
-                    SettingsPickerRow(
-                        title: language.text("语言", "Language"),
-                        detail: language.text("影响主窗口、浮窗和设置窗口", "Applies to the main window, menu popover, and settings")
-                    ) {
-                        SettingsSegmentedControl(
-                            selection: $settings.language,
-                            options: [
-                                SettingsSegmentOption(value: .zh, title: "中文"),
-                                SettingsSegmentOption(value: .en, title: "English")
-                            ],
-                            width: settingsAccessoryColumnWidth
-                        )
-                    }
-
-                    SettingsPickerRow(
-                        title: language.text("外观", "Appearance"),
-                        detail: language.text("默认跟随系统", "System is the default")
-                    ) {
-                        SettingsSegmentedControl(
-                            selection: $settings.themeMode,
-                            options: [
-                                SettingsSegmentOption(value: .system, title: language.text("自动", "System")),
-                                SettingsSegmentOption(value: .light, title: language.text("浅色", "Light")),
-                                SettingsSegmentOption(value: .dark, title: language.text("深色", "Dark"))
-                            ],
-                            width: settingsAccessoryColumnWidth
-                        )
-                    }
-
-                    SettingsPickerRow(
-                        title: language.text("配色", "Color palette"),
-                        detail: language.text("精选内置配色，同时适配浅色与深色", "Curated palettes for both Light and Dark appearances")
-                    ) {
-                        PaletteSettingsView(settings: settings, onOpenLibrary: onOpenPaletteLibrary)
-                            .frame(width: settingsAccessoryColumnWidth)
-                    }
-
-                    SettingsPickerRow(
-                        title: language.text("额度环动效", "Quota ring motion"),
-                        detail: language.text(
-                            "默认仅窗口置前且聚焦；省电仅悬停环带",
-                            "Default: frontmost and focused; Power Saving: ring hover only"
-                        )
-                    ) {
-                        SettingsSegmentedControl(
-                            selection: $settings.particleAnimationMode,
-                            options: [
-                                SettingsSegmentOption(value: .standard, title: language.text("默认", "Default")),
-                                SettingsSegmentOption(value: .powerSaving, title: language.text("省电", "Power Saving"))
-                            ],
-                            width: settingsAccessoryColumnWidth
-                        )
-                    }
-                }
-
-                settingsSection(
-                    title: "Runtime",
-                    detail: language.text("展示范围", "Display")
-                ) {
-                    SettingsPickerRow(
-                        title: language.text("展示 Runtime", "Visible runtimes"),
-                        detail: language.text("主窗口和菜单栏浮窗中的 Runtime 范围", "Runtime scope in the main window and menu popover")
-                    ) {
-                        SettingsRuntimeMultiSelectControl(
-                            selectedScopes: settings.visibleRuntimeScopes,
-                            language: language
-                        ) { scope in
-                            settings.setRuntime(scope, visible: !settings.isRuntimeVisible(scope))
-                        }
-                        .help(runtimeSelectionHelp)
-                        .accessibilityLabel(language.text("展示 Runtime", "Visible runtimes"))
-                        .accessibilityValue(
-                            settings.visibleRuntimeScopes
-                                .map(\.displayName)
-                                .joined(separator: ", ")
-                        )
-                    }
-                }
-
-                settingsSection(
-                    title: language.text("数据与统计", "Data & Statistics"),
-                    detail: language.text("自然日口径", "Calendar-day basis")
-                ) {
-                    SettingsPickerRow(
-                        title: language.text("统计时区", "Statistics time zone"),
-                        detail: statisticsTimeZoneDetail
-                    ) {
-                        SettingsSegmentedControl(
-                            selection: statisticsTimeZoneSelectionBinding,
-                            options: [
-                                SettingsSegmentOption(value: .system, title: language.text("跟随系统", "System")),
-                                SettingsSegmentOption(value: .utc, title: "UTC"),
-                                SettingsSegmentOption(value: .fixed, title: language.text("固定", "Fixed"))
-                            ],
-                            width: settingsAccessoryColumnWidth
-                        )
-                    }
-
-                    if store.statisticsPreference.selection == .fixed {
-                        SettingsPickerRow(
-                            title: language.text("固定时区", "Fixed time zone"),
-                            detail: language.text("使用 IANA 时区，自动处理夏令时", "Uses an IANA zone and observes daylight saving time")
-                        ) {
-                            Picker("", selection: statisticsFixedIdentifierBinding) {
-                                ForEach(TimeZone.knownTimeZoneIdentifiers, id: \.self) { identifier in
-                                    Text(identifier).tag(identifier)
-                                }
-                            }
-                            .labelsHidden()
-                            .controlSize(.small)
-                            .frame(
-                                width: settingsAccessoryColumnWidth,
-                                height: settingsControlVisualHeight
-                            )
-                        }
-                    }
-                }
-
-                settingsSection(
-                    title: language.text("状态栏", "Menu Bar"),
-                    detail: language.text("内容与显示密度", "Content and density")
-                ) {
-                    StatusItemSettingsView(settings: settings, store: store)
-                }
-
-                settingsSection(
-                    title: language.text("窗口", "Window"),
-                    detail: language.text("主窗口行为", "Main window")
-                ) {
-                    SettingsToggleRow(
-                        title: language.text("保持主窗口置顶", "Keep main window on top"),
-                        detail: language.text("适合需要持续观察用量时开启", "Use this when you need the usage view visible")
-                    ) {
-                        SettingsSwitchToggle(isOn: $settings.keepMainWindowOnTop)
-                    }
-
-                    SettingsToggleRow(
-                        title: language.text("关闭后继续后台运行", "Keep running after closing the window"),
-                        detail: language.text("关闭主窗口会隐藏 Dock 图标，可从菜单栏或快捷键再次打开", "Closing the main window hides the Dock icon; reopen from the menu bar or shortcut")
-                    ) {
-                        SettingsSwitchToggle(isOn: $settings.keepRunningWhenMainWindowClosed)
-                    }
-
-                    SettingsPickerRow(
-                        title: language.text("快捷键", "Shortcut"),
-                        detail: language.text(
-                            "默认 ⌘U；自定义需两个修饰键（含 ⌘ 或 ⌃）；仅能检测独占冲突",
-                            "Default: ⌘U. Custom: two modifiers including ⌘ or ⌃; only exclusive conflicts are detected"
-                        )
-                    ) {
-                        HStack(spacing: settingsShortcutControlSpacing) {
-                            ShortcutRecorderView(
-                                shortcut: settings.globalShortcut,
-                                language: language,
-                                onRecord: settings.requestGlobalShortcut,
-                                onClear: settings.clearGlobalShortcut
-                            )
-                            .frame(
-                                width: settingsShortcutRecorderWidth,
-                                height: settingsControlVisualHeight
-                            )
-
-                            Button {
-                                settings.resetGlobalShortcut()
-                            } label: {
-                                Text(language.text("恢复默认", "Restore Default"))
-                                    .font(.system(size: settingsControlFontSize, weight: .medium))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.78)
-                                    .frame(
-                                        width: settingsShortcutActionWidth,
-                                        height: settingsControlVisualHeight
-                                    )
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(
-                                settings.globalShortcut == .default
-                                    && settings.globalShortcutError == nil
-                            )
-                        }
-                        .frame(width: settingsAccessoryColumnWidth, alignment: .trailing)
-                    }
-
-                    if let error = settings.globalShortcutError {
-                        SettingsErrorRow(
-                            title: language.text("快捷键不可用", "Shortcut unavailable"),
-                            message: error.message(language: language),
-                            currentValue: settings.globalShortcut.map {
-                                language.text("当前仍使用 \($0.displayName)", "Still using \($0.displayName)")
-                            } ?? language.text("当前未设置全局快捷键", "No global shortcut is currently set")
-                        )
-                    }
-                }
-
-                settingsSection(
-                    title: language.text("系统", "System"),
-                    detail: language.text("状态与更新", "Status")
-                ) {
-                    SettingsValueRow(
-                        title: language.text("当前 Runtime", "Current runtime"),
-                        detail: language.text("主窗口数据范围", "Main window data scope"),
-                        value: store.selectedRuntimeScope.displayName
-                    )
-                    SettingsValueRow(
-                        title: language.text("计划状态", "Plan"),
-                        detail: language.text("来自本机账户读取结果", "Read from the local account result"),
-                        value: planLabel
-                    )
-                    AppUpdateSettingsRows(
-                        settings: settings,
-                        updateStore: updateStore,
-                        language: language
-                    )
-                }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, settingsContentTopInset)
-                .padding(.bottom, 20)
-            }
+        HStack(spacing: 0) {
+            settingsSidebar
+            Divider()
+            settingsContent
         }
-        .frame(width: 480, alignment: .topLeading)
+        .frame(width: 780, height: 640)
+        .background(FixedVisualPalette.sectionFill(colorScheme).opacity(0.35))
         .appVisualEnvironment(
             catalog: settings.paletteCatalog,
             paletteID: settings.paletteID,
             appearance: PaletteAppearance(colorScheme)
         )
         .readableForegroundHierarchy(colorScheme)
+    }
+
+    private var settingsSidebar: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            settingsHeader
+                .padding(.horizontal, 12)
+
+            List(selection: categorySelection) {
+                ForEach(SettingsCategory.allCases) { category in
+                    HStack(spacing: 9) {
+                        Image(systemName: category.icon)
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(width: 19)
+                        Text(category.title(language: language))
+                            .font(.system(size: 12, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    .frame(height: 28)
+                    .tag(category)
+                }
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .padding(.horizontal, -6)
+            Spacer()
+            Text(language.text("配置保存在本机", "Settings stay on this Mac"))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 12)
+        }
+        .padding(.vertical, 18)
+        .padding(.horizontal, 10)
+        .frame(width: 190)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(.ultraThinMaterial)
+    }
+
+    private var categorySelection: Binding<SettingsCategory?> {
+        Binding(
+            get: { selectedCategory },
+            set: { category in
+                if let category {
+                    selectedCategory = category
+                }
+            }
+        )
+    }
+
+    private var settingsContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            settingsContentHeader
+            Divider()
+            ScrollView(.vertical, showsIndicators: false) {
+                selectedSettingsContent
+                    .padding(20)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var settingsContentHeader: some View {
+        HStack(spacing: 12) {
+            Image(systemName: selectedCategory.icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(visualTokens.accent.primary.color)
+                .frame(width: 38, height: 38)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(visualTokens.accent.primary.color.opacity(0.12))
+                )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(selectedCategory.title(language: language))
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                Text(selectedCategory.detail(language: language))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .frame(height: 72)
+    }
+
+    @ViewBuilder
+    private var selectedSettingsContent: some View {
+        switch selectedCategory {
+        case .general:
+            generalSettings
+        case .statistics:
+            statisticsSettings
+        case .menuBar:
+            menuBarSettings
+        case .window:
+            windowSettings
+        case .webDAV:
+            webDAVSettings
+        case .system:
+            systemSettings
+        }
+    }
+
+    private var generalSettings: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            settingsSection(title: language.text("界面", "Interface"), detail: language.text("语言与外观", "Language and appearance")) {
+                SettingsPickerRow(title: language.text("语言", "Language"), detail: language.text("影响主窗口、浮窗和设置窗口", "Applies to the main window, menu popover, and settings")) {
+                    SettingsSegmentedControl(
+                        selection: $settings.language,
+                        options: [
+                            SettingsSegmentOption(value: .zh, title: "中文"),
+                            SettingsSegmentOption(value: .en, title: "English")
+                        ],
+                        width: 156
+                    )
+                }
+                SettingsPickerRow(title: language.text("外观", "Appearance"), detail: language.text("默认跟随系统", "System is the default")) {
+                    SettingsSegmentedControl(
+                        selection: $settings.themeMode,
+                        options: [
+                            SettingsSegmentOption(value: .system, title: language.text("自动", "System")),
+                            SettingsSegmentOption(value: .light, title: language.text("浅色", "Light")),
+                            SettingsSegmentOption(value: .dark, title: language.text("深色", "Dark"))
+                        ],
+                        width: 190
+                    )
+                }
+                SettingsPickerRow(
+                    title: language.text("配色", "Color palette"),
+                    detail: language.text("精选内置配色，同时适配浅色与深色", "Curated palettes for both Light and Dark appearances")
+                ) {
+                    PaletteSettingsView(settings: settings, onOpenLibrary: onOpenPaletteLibrary)
+                        .frame(width: 250)
+                }
+                SettingsPickerRow(
+                    title: language.text("额度环动效", "Quota ring motion"),
+                    detail: language.text(
+                        "默认仅窗口置前且聚焦；省电仅悬停环带",
+                        "Default: frontmost and focused; Power Saving: ring hover only"
+                    )
+                ) {
+                    SettingsSegmentedControl(
+                        selection: $settings.particleAnimationMode,
+                        options: [
+                            SettingsSegmentOption(value: .standard, title: language.text("默认", "Default")),
+                            SettingsSegmentOption(value: .powerSaving, title: language.text("省电", "Power Saving"))
+                        ],
+                        width: 250
+                    )
+                }
+            }
+            settingsSection(title: "Runtime", detail: language.text("展示范围", "Display scope")) {
+                SettingsPickerRow(title: language.text("展示Runtime", "Visible runtimes"), detail: language.text("主窗口和菜单栏浮窗中的Runtime范围", "Runtime scope in the main window and menu popover")) {
+                    SettingsRuntimeMultiSelectControl(selectedScopes: settings.visibleRuntimeScopes, language: language) { scope in
+                        settings.setRuntime(scope, visible: !settings.isRuntimeVisible(scope))
+                    }
+                    .help(runtimeSelectionHelp)
+                    .accessibilityLabel(language.text("展示Runtime", "Visible runtimes"))
+                    .accessibilityValue(settings.visibleRuntimeScopes.map(\.displayName).joined(separator: ", "))
+                }
+            }
+        }
+    }
+
+    private var statisticsSettings: some View {
+        settingsSection(title: language.text("统计口径", "Statistics basis"), detail: language.text("自然日边界", "Calendar-day boundary")) {
+            SettingsPickerRow(title: language.text("统计时区", "Statistics time zone"), detail: statisticsTimeZoneDetail) {
+                SettingsSegmentedControl(
+                    selection: statisticsTimeZoneSelectionBinding,
+                    options: [
+                        SettingsSegmentOption(value: .system, title: language.text("跟随系统", "System")),
+                        SettingsSegmentOption(value: .utc, title: "UTC"),
+                        SettingsSegmentOption(value: .fixed, title: language.text("固定", "Fixed"))
+                    ],
+                    width: 250
+                )
+            }
+            if store.statisticsPreference.selection == .fixed {
+                SettingsPickerRow(title: language.text("固定时区", "Fixed time zone"), detail: language.text("使用IANA时区，自动处理夏令时", "Uses an IANA zone and observes daylight saving time")) {
+                    Picker("", selection: statisticsFixedIdentifierBinding) {
+                        ForEach(TimeZone.knownTimeZoneIdentifiers, id: \.self) { identifier in
+                            Text(identifier).tag(identifier)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 250)
+                }
+            }
+        }
+    }
+
+    private var menuBarSettings: some View {
+        settingsSection(title: language.text("状态栏内容", "Menu bar content"), detail: language.text("实时预览与显示方式", "Live preview and presentation")) {
+            StatusItemSettingsView(settings: settings, store: store)
+        }
+    }
+
+    private var windowSettings: some View {
+        settingsSection(title: language.text("窗口行为", "Window behavior"), detail: language.text("主窗口与快捷键", "Main window and shortcut")) {
+            SettingsToggleRow(title: language.text("保持主窗口置顶", "Keep main window on top"), detail: language.text("适合需要持续观察用量时开启", "Use this when you need the usage view visible")) {
+                SettingsSwitchToggle(isOn: $settings.keepMainWindowOnTop)
+            }
+            SettingsToggleRow(title: language.text("关闭后继续后台运行", "Keep running after closing the window"), detail: language.text("关闭主窗口会隐藏Dock图标，可从菜单栏或快捷键再次打开", "Closing the main window hides the Dock icon; reopen from the menu bar or shortcut")) {
+                SettingsSwitchToggle(isOn: $settings.keepRunningWhenMainWindowClosed)
+            }
+            SettingsPickerRow(
+                title: language.text("快捷键", "Shortcut"),
+                detail: language.text("默认⌘U；自定义需两个修饰键（含⌘或⌃）；仅能检测独占冲突", "Default: ⌘U. Custom: two modifiers including ⌘ or ⌃; only exclusive conflicts are detected")
+            ) {
+                HStack(spacing: settingsShortcutControlSpacing) {
+                    ShortcutRecorderView(shortcut: settings.globalShortcut, language: language, onRecord: settings.requestGlobalShortcut, onClear: settings.clearGlobalShortcut)
+                        .frame(width: settingsShortcutRecorderWidth, height: settingsSegmentHeight)
+                    Button(language.text("恢复默认", "Restore Default")) {
+                        settings.resetGlobalShortcut()
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(settings.globalShortcut == .default && settings.globalShortcutError == nil)
+                }
+            }
+            if let error = settings.globalShortcutError {
+                SettingsErrorRow(
+                    title: language.text("快捷键不可用", "Shortcut unavailable"),
+                    message: error.message(language: language),
+                    currentValue: settings.globalShortcut.map {
+                        language.text("当前仍使用\($0.displayName)", "Still using \($0.displayName)")
+                    } ?? language.text("当前未设置全局快捷键", "No global shortcut is currently set")
+                )
+            }
+        }
+    }
+
+    private var webDAVSettings: some View {
+        settingsSection(title: language.text("WebDAV配置", "WebDAV configuration"), detail: language.text("仅同步codexU配置", "codexU settings only")) {
+            WebDAVSyncSettingsView(store: webDAVSyncStore, language: language)
+        }
+    }
+
+    private var systemSettings: some View {
+        settingsSection(title: language.text("状态与更新", "Status and updates"), detail: language.text("本机Runtime与版本", "Local runtime and version")) {
+            SettingsValueRow(title: language.text("当前Runtime", "Current runtime"), detail: language.text("主窗口数据范围", "Main window data scope"), value: store.selectedRuntimeScope.displayName)
+            SettingsValueRow(title: language.text("计划状态", "Plan"), detail: language.text("来自本机账户读取结果", "Read from the local account result"), value: planLabel)
+            AppUpdateSettingsRows(settings: settings, updateStore: updateStore, language: language)
+        }
     }
 
     private var statisticsTimeZoneSelectionBinding: Binding<StatisticsTimeZoneSelection> {
@@ -4736,12 +4832,12 @@ struct SettingsPanelView: View {
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
                 .scaledToFit()
-                .frame(width: 32, height: 32)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(width: 30, height: 30)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(language.text("设置", "Settings"))
-                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
                 Text("codexU")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -10044,12 +10140,14 @@ final class MainAppWindow: NSWindow {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate {
     private let startupPerformanceSpan = PerformanceMonitor.shared.begin(.appStartup)
     private let store = UsageStore()
     private let paletteCatalog = PaletteCatalog.loadFromMainBundle()
     private lazy var settings = AppSettings(paletteCatalog: paletteCatalog)
     private lazy var updateStore = AppUpdateStore(settings: settings)
+    private lazy var webDAVSyncStore = WebDAVSyncStore(settings: settings, usageStore: store)
     private var window: MainAppWindow?
     private var settingsWindow: NSWindow?
     private var paletteLibraryWindow: NSWindow?
@@ -10071,6 +10169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         settings.themeMode.applyAppearance()
+        _ = webDAVSyncStore
         setupMainMenu()
         debugLog("app launched bundle=\(Bundle.main.bundlePath)")
 
@@ -10080,7 +10179,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.updateTaskBoardPollingActivity()
+            Task { @MainActor [weak self] in
+                self?.updateTaskBoardPollingActivity()
+            }
         }
         setupStatusItemIfNeeded()
         observeStatusItemUsage()
@@ -10326,6 +10427,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
             keyEquivalent: "q"
         ))
 
+        let editMenuItem = NSMenuItem()
+        mainMenu.addItem(editMenuItem)
+        let editMenu = NSMenu(title: language.text("编辑", "Edit"))
+        editMenuItem.submenu = editMenu
+        editMenu.addItem(NSMenuItem(
+            title: language.text("撤销", "Undo"),
+            action: Selector(("undo:")),
+            keyEquivalent: "z"
+        ))
+        let redoItem = NSMenuItem(
+            title: language.text("重做", "Redo"),
+            action: Selector(("redo:")),
+            keyEquivalent: "z"
+        )
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(redoItem)
+        editMenu.addItem(.separator())
+        editMenu.addItem(NSMenuItem(
+            title: language.text("剪切", "Cut"),
+            action: #selector(NSText.cut(_:)),
+            keyEquivalent: "x"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: language.text("复制", "Copy"),
+            action: #selector(NSText.copy(_:)),
+            keyEquivalent: "c"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: language.text("粘贴", "Paste"),
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: language.text("全选", "Select All"),
+            action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: "a"
+        ))
+
         let windowMenuItem = NSMenuItem()
         mainMenu.addItem(windowMenuItem)
         let windowMenu = NSMenu(title: language.text("窗口", "Window"))
@@ -10353,7 +10492,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
 
         if settingsWindow == nil {
             let settingsWindow = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 480, height: 620),
+                contentRect: NSRect(x: 0, y: 0, width: 780, height: 640),
                 styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
@@ -10373,7 +10512,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
                     settings: settings,
                     store: store,
                     updateStore: updateStore,
-                    onOpenPaletteLibrary: { [weak self] in self?.openPaletteLibraryWindow() }
+                    onOpenPaletteLibrary: { [weak self] in self?.openPaletteLibraryWindow() },
+                    webDAVSyncStore: webDAVSyncStore
                 ),
                 cornerRadius: 20
             )
@@ -10972,6 +11112,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--evaluate-phase-one-gate") {
             exit(PhaseOneGateCommand.run(arguments: CommandLine.arguments))
+        }
+
+        if CommandLine.arguments.contains("--self-test-webdav-sync") {
+            exit(WebDAVSyncSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--dump-json") {

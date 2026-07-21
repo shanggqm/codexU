@@ -26,6 +26,7 @@ build/codexU.app/Contents/MacOS/codexU --self-test-status-item
 build/codexU.app/Contents/MacOS/codexU --self-test-rate-limits
 build/codexU.app/Contents/MacOS/codexU --self-test-particle-animation
 build/codexU.app/Contents/MacOS/codexU --self-test-updates
+build/codexU.app/Contents/MacOS/codexU --self-test-webdav-sync
 ./scripts/test-parsers.sh
 
 make release-all

@@ -40,8 +40,9 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - Runs as a standard macOS window with a compact default layout, resizing from 820 to 1280 points without changing card order or information structure, and restoration of the previous window size. It supports Dock, system window controls, minimization, and optional background running after the main window is closed; closing the main window hides the Dock icon and keeps the menu bar item.
 - Uses `Command + U` by default to show or hide the main window, and the shortcut can be customized in Settings. The menu bar runtime menu can also open the main window, open settings, or quit.
 - Includes a Settings window for Chinese/English UI text, system/light/dark appearance, menu bar content with live preview, always-on-top behavior, close-window behavior, system status, and update check configuration.
+- Supports explicit HTTPS WebDAV configuration for syncing codexU interface and display settings across Macs; the password is stored only in macOS Keychain.
 - Checks GitHub Releases for newer versions by default, including beta releases, and offers the DMG that matches the current Mac architecture. It does not silently download or install updates, and automatic checks can be turned off.
-- Reads data locally and does not upload usage, threads, or account data to a third-party service.
+- Usage, threads, logs, Skills, local paths, and account data remain local and are never included in the WebDAV settings file.
 
 ## Keyboard Shortcuts
 
@@ -51,7 +52,7 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 - The app detects conflicts with other exclusive hotkey registrations. macOS does not provide a complete query for nonexclusive registrations, so choose another combination if another app still conflicts.
 - Menu bar gauge icon: opens the runtime menu. Clicking a Codex or Claude Code card opens the main widget with that runtime selected.
 - Menu bar runtime menu: shows quick Codex / Claude Code status and provides Open, Settings, and Quit actions.
-- Settings window: configure language, appearance, menu bar mode/quota direction/visible metrics, always-on-top and close-window behavior, and control automatic checks or manually check GitHub Releases from the System section.
+- Settings window: configure language, appearance, menu bar mode/quota direction/visible metrics, always-on-top and close-window behavior, sync codexU settings through WebDAV, and control update checks.
 - Main-window refresh button: immediately refresh quota, token usage, trend, and task board.
 - System window controls: close, minimize, or zoom the main window. After closing, reopen from the menu bar item or shortcut; quit from the menu bar runtime menu or the app menu.
 
@@ -67,6 +68,8 @@ codexU is distributed outside the Mac App Store. On first launch, macOS may bloc
 You can also right-click `codexU.app` in Finder and choose **Open**, then confirm the same security prompt.
 
 codexU needs access to local Codex data under `~/.codex/`. When Claude Code stats are used, it also reads local transcripts, tasks, and status cache files under `~/.claude/`. If macOS asks for file or folder access, allow it so the widget can read local usage, threads, and automation metadata.
+
+WebDAV sync is off by default. Once configured, codexU uploads only language, appearance, visible runtimes, statistics time zone, menu bar, window behavior, and update-check preferences to the HTTPS WebDAV server supplied by the user. The file excludes Codex databases, threads, logs, Skills, shortcuts, account data, local paths, and WebDAV credentials. The password stays in macOS Keychain. Before applying a downloaded configuration, codexU backs up the current settings under `~/Library/Application Support/codexU/Configuration Backups/`.
 
 ## Install
 
@@ -153,6 +156,7 @@ For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md
 - Claude Code tools, Skills, and tasks: transcript `tool_use.name` / explicit Skill attribution, plus `~/.claude/tasks/**/*.json`. When a Skill path is absent, codexU infers it from Claude Code's current personal, project, nested, plugin, and legacy-command locations; unresolved history is shown as “not located.”
 - Claude Code active quota: optional `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`; without it, 5-hour and 7-day quota show `--`.
 - Update checks: default access to the GitHub Releases API for public `shanggqm/codexU` release metadata, cached in `~/Library/Caches/codexU/update-check.json`.
+- Optional WebDAV sync: reads or writes `codexu-config.json` on the user-provided HTTPS WebDAV server only after explicit setup and manual action or when automatic settings sync is enabled.
 
 Current Codex quota APIs expose rolling-window percentages and reset times, not absolute account quota sizes. Claude Code support reads local history and an optional active snapshot; it is not a Claude.ai official billing view. See [RESEARCH.md](RESEARCH.md) for the data model and fallback behavior.
 
