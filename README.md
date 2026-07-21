@@ -1,7 +1,7 @@
 # codexU
 
 > [!IMPORTANT]
-> **建议升级到 v1.1.4 或更高版本。** v1.1.4 修复 app-server 长连接等待凑满 64 KiB 才返回、导致 Codex 账户与额度读取超时的问题；额度和任务流现在使用有背压的 POSIX 部分读取，并保留缓冲、超时和进程清理边界。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
+> **建议升级到 v1.1.5 或更高版本。** v1.1.5 修复从已有 Codex 对话创建分支后，继承的 token 历史被重复计入累计、今日和近 7 日用量的问题；分支现在只统计创建后的新增用量。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
 
 [产品官网](https://shanggqm.github.io/codexU-site/) · [下载最新版本](https://github.com/shanggqm/codexU/releases/latest) · [English](README.en.md)
 
@@ -159,10 +159,10 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-1.1.4-mac-arm64.dmg
-dist/codexU-1.1.4-mac-arm64.dmg.sha256
-dist/codexU-1.1.4-mac-x86_64.dmg
-dist/codexU-1.1.4-mac-x86_64.dmg.sha256
+dist/codexU-1.1.5-mac-arm64.dmg
+dist/codexU-1.1.5-mac-arm64.dmg.sha256
+dist/codexU-1.1.5-mac-x86_64.dmg
+dist/codexU-1.1.5-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。

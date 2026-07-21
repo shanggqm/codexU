@@ -1,7 +1,7 @@
 # codexU
 
 > [!IMPORTANT]
-> **Upgrade to v1.1.4 or later.** v1.1.4 fixes app-server pipe reads that waited for a full 64 KiB buffer and caused Codex account and quota requests to time out. Quota and task streams now use bounded POSIX partial reads while retaining buffer, timeout, and process-cleanup limits. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
+> **Upgrade to v1.1.5 or later.** v1.1.5 fixes inherited token history being counted again after branching an existing Codex conversation. Forked conversations now count only usage added after the branch point. [Download the latest release](https://github.com/shanggqm/codexU/releases/latest).
 
 codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT Codex and Claude Code quota, token usage, and today's task status. It keeps the information you check most in the menu bar and main window, so you can quickly see remaining quota, reset times, and daily work progress.
 
@@ -132,10 +132,10 @@ make release-all
 Release artifacts are written to `dist/`, for example:
 
 ```text
-dist/codexU-1.1.4-mac-arm64.dmg
-dist/codexU-1.1.4-mac-arm64.dmg.sha256
-dist/codexU-1.1.4-mac-x86_64.dmg
-dist/codexU-1.1.4-mac-x86_64.dmg.sha256
+dist/codexU-1.1.5-mac-arm64.dmg
+dist/codexU-1.1.5-mac-arm64.dmg.sha256
+dist/codexU-1.1.5-mac-x86_64.dmg
+dist/codexU-1.1.5-mac-x86_64.dmg.sha256
 ```
 
 For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md).
