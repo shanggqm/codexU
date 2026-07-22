@@ -3783,6 +3783,7 @@ struct UsageWidgetView: View {
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var selectedDashboardTab: DashboardTab = .tasks
     @State private var focusedThreadID: String?
+    @State private var leadershipPreviewLevel: Int?
 
     static let widgetDefaultWidth: CGFloat = 820
     static let widgetMinWidth: CGFloat = 820
@@ -3938,6 +3939,7 @@ struct UsageWidgetView: View {
         HStack(alignment: .top, spacing: 14) {
             LeadershipCommandRadiusButton(
                 snapshot: store.multiRuntimeSnapshot.leadership,
+                previewLevel: leadershipPreviewLevel,
                 language: language
             ) {
                 selectedDashboardTab = .leadership
@@ -3957,22 +3959,13 @@ struct UsageWidgetView: View {
                 )
                 .frame(width: 145, height: 145)
 
-                QuotaResetSummary(
-                    fiveHourQuota: snapshot.fiveHourQuota,
+                QuotaResetCompactSummary(
                     sevenDayQuota: snapshot.sevenDayQuota,
-                    monthlyQuota: snapshot.monthlyQuota,
+                    resetCredits: snapshot.credits?.resetCredits,
+                    resetCreditDetails: snapshot.credits?.resetCreditDetails,
                     language: language
                 )
-                .frame(width: 154, height: 26)
-
-                if let resetCredits = snapshot.credits?.resetCredits, resetCredits >= 1 {
-                    ResetCreditAvailability(
-                        count: resetCredits,
-                        details: snapshot.credits?.resetCreditDetails,
-                        language: language
-                    )
-                    .frame(width: 154)
-                }
+                .frame(width: 154)
             }
             .zIndex(1)
 
@@ -4038,7 +4031,8 @@ struct UsageWidgetView: View {
         case .leadership:
             LeadershipDashboardPanel(
                 snapshot: store.multiRuntimeSnapshot.leadership,
-                language: language
+                language: language,
+                previewLevel: $leadershipPreviewLevel
             )
         case .usage:
             UsageTrendPanel(
@@ -6770,189 +6764,68 @@ private struct QuotaUnavailablePlaceholder: View {
     }
 }
 
-struct QuotaResetSummary: View {
-    let fiveHourQuota: RateWindow?
+private struct QuotaResetCompactSummary: View {
     let sevenDayQuota: RateWindow?
-    let monthlyQuota: RateWindow?
-    let language: WidgetLanguage
-    @Environment(\.visualTokens) private var visualTokens
-
-    private var presentation: QuotaRingPresentation {
-        QuotaRingPresentation(
-            fiveHourQuota: fiveHourQuota,
-            sevenDayQuota: sevenDayQuota,
-            monthlyQuota: monthlyQuota
-        )
-    }
-
-    var body: some View {
-        VStack(spacing: 4) {
-            ForEach(presentation.items) { item in
-                QuotaResetLine(
-                    title: item.kind.compactTitle,
-                    window: item.window,
-                    color: item.paletteRole.tokens(in: visualTokens).label.color,
-                    language: language
-                )
-            }
-        }
-    }
-}
-
-struct QuotaResetLine: View {
-    let title: String
-    let window: RateWindow
-    let color: Color
+    let resetCredits: Int?
+    let resetCreditDetails: [ResetCreditDetail]?
     let language: WidgetLanguage
 
     var body: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(color)
-                .frame(width: 5, height: 5)
-            Text(title)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundStyle(color)
-                .monospacedDigit()
-            Text(language.text("重置", "resets"))
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 4)
-            Text(resetText)
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
+        HStack(spacing: 4) {
+            OverviewFactTile(
+                systemName: "calendar.badge.clock",
+                value: sevenDayResetValue,
+                label: language.text("7d 重置", "7d reset")
+            )
+            .help(sevenDayResetHelp)
+
+            OverviewFactTile(
+                systemName: "arrow.counterclockwise.circle.fill",
+                value: resetCredits.map(String.init) ?? "--",
+                label: language.text("可用重置", "Resets")
+            )
+            .help(resetCreditHelp)
         }
+        .accessibilityElement(children: .contain)
     }
 
-    private var resetText: String {
-        guard let resetsAt = window.resetsAt else { return "--" }
+    private var sevenDayResetValue: String {
+        guard let resetsAt = sevenDayQuota?.resetsAt else { return "--" }
         return resetDateTime(resetsAt, language: language)
     }
-}
 
-private struct ResetCreditAvailability: View {
-    let count: Int
-    let details: [ResetCreditDetail]?
-    let language: WidgetLanguage
-    @Environment(\.visualTokens) private var visualTokens
-    @State private var isHoveringInlineDetails = false
-    @State private var inlineDetailsHoverLocation: CGPoint?
-
-    private var effectiveTooltipLocation: CGPoint {
-        inlineDetailsHoverLocation ?? CGPoint(x: 142, y: 4)
+    private var sevenDayResetHelp: String {
+        guard let resetsAt = sevenDayQuota?.resetsAt else {
+            return language.text("7d 重置时间暂不可用", "7d reset time is unavailable")
+        }
+        let value = resetDateTime(resetsAt, language: language)
+        return language.text("7d 额度将在 \(value) 重置", "7d quota resets at \(value)")
     }
 
-    private var disclosure: ResetCreditDisclosure {
-        ResetCreditDisclosure(totalCount: count, details: details ?? [])
-    }
+    private var resetCreditHelp: String {
+        guard let count = resetCredits else {
+            return language.text("可用重置次数暂不可用", "Available reset count is unavailable")
+        }
 
-    var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.counterclockwise.circle.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(visualTokens.accent.primary.color)
-                Text(language.text("可用重置次数", "Available resets"))
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 4)
-                Text("\(count)")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.primary)
+        var lines = [language.text("可用重置次数：\(count)", "Available resets: \(count)")]
+        let details = Array((resetCreditDetails ?? []).prefix(max(count, 0)))
+        for (index, detail) in details.enumerated() {
+            let value: String
+            if let expiresAt = detail.expiresAt {
+                value = language.text(
+                    "\(resetDateTime(expiresAt, language: language)) 到期",
+                    "Expires \(resetDateTime(expiresAt, language: language))"
+                )
+            } else {
+                value = language.text("未提供到期时间", "Expiry unavailable")
             }
-
-            if !disclosure.inlineDetails.isEmpty {
-                VStack(spacing: 4) {
-                    ForEach(Array(disclosure.inlineDetails.enumerated()), id: \.element.id) { index, detail in
-                        HStack(spacing: 5) {
-                            Text(language.text("第 \(index + 1) 次", "Reset \(index + 1)"))
-                                .font(.system(size: 8.5, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.secondary)
-                            Spacer(minLength: 4)
-                            Text(expirationText(detail.expiresAt))
-                                .font(.system(size: 8.5, weight: .semibold, design: .rounded))
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-                .contentShape(Rectangle())
-                .onHover { hovering in
-                    isHoveringInlineDetails = hovering
-                    if !hovering {
-                        inlineDetailsHoverLocation = nil
-                    }
-                }
-                .onContinuousHover { phase in
-                    switch phase {
-                    case .active(let location):
-                        isHoveringInlineDetails = true
-                        inlineDetailsHoverLocation = location
-                    case .ended:
-                        inlineDetailsHoverLocation = nil
-                    }
-                }
-                .overlay(alignment: .topLeading) {
-                    if isHoveringInlineDetails, disclosure.showsHoverTooltip {
-                        ChartTooltipView(payload: tooltipPayload, prefersOpaqueSurface: true)
-                            .frame(width: chartTooltipWidth)
-                            .offset(x: effectiveTooltipLocation.x + 12, y: effectiveTooltipLocation.y + 10)
-                            .transition(.opacity.combined(with: .scale(scale: 0.98)))
-                            .zIndex(20)
-                    }
-                }
-            } else if !disclosure.showsHoverTooltip, disclosure.missingDetailCount > 0 {
-                Text(language.text(
-                    "另有 \(disclosure.missingDetailCount) 次未提供到期时间",
-                    "\(disclosure.missingDetailCount) expiry times unavailable"
-                ))
-                    .font(.system(size: 8.2, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            lines.append(language.text("第 \(index + 1) 次：\(value)", "Reset \(index + 1): \(value)"))
         }
-        .zIndex(isHoveringInlineDetails ? 20 : 0)
-        .onDisappear {
-            isHoveringInlineDetails = false
-            inlineDetailsHoverLocation = nil
+        if count > details.count {
+            let missing = count - details.count
+            lines.append(language.text("其余 \(missing) 次：未提供到期时间", "Other \(missing): expiry unavailable"))
         }
-        .accessibilityElement(children: .combine)
-    }
-
-    private var tooltipPayload: ChartTooltipPayload {
-        var rows = disclosure.fullDetails.enumerated().map { index, detail in
-            ChartTooltipRow(
-                id: detail.id,
-                label: language.text("第 \(index + 1) 次", "Reset \(index + 1)"),
-                value: expirationText(detail.expiresAt)
-            )
-        }
-        if disclosure.missingDetailCount > 0 {
-            rows.append(ChartTooltipRow(
-                id: "missing-expiry-details",
-                label: language.text("其余 \(disclosure.missingDetailCount) 次", "Other \(disclosure.missingDetailCount)"),
-                value: language.text("未提供到期时间", "Expiry unavailable")
-            ))
-        }
-        return ChartTooltipPayload(
-            title: language.text("可用重置次数 \(count)", "\(count) available resets"),
-            rows: rows
-        )
-    }
-
-    private func expirationText(_ date: Date?) -> String {
-        guard let date else {
-            return language.text("未提供到期时间", "Expiry unavailable")
-        }
-        let value = resetDateTime(date, language: language)
-        return language.text("\(value) 到期", "Expires \(value)")
+        return lines.joined(separator: "\n")
     }
 }
 
