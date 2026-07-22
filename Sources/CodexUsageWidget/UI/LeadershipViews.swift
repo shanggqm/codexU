@@ -86,7 +86,7 @@ struct LeadershipCommandRadiusButton: View {
                     VStack(spacing: 0) {
                         OverviewVisualHeader(
                             title: language.text("AI 领导力", "AI Leadership"),
-                            systemName: "scope",
+                            systemName: nil,
                             badge: "28D"
                         )
                         Spacer()
@@ -441,22 +441,21 @@ private struct LeadershipBadgeLockup: View {
             HStack(spacing: 3) {
                 if let title {
                     Text("L\(min(title.level, 7))")
-                        .foregroundStyle(visualTokens.accent.primaryStrong.color)
                 }
                 Text(title?.name ?? emptyTitle)
-                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
             }
             .font(.system(size: 8, weight: .bold, design: .rounded))
+            .foregroundStyle(Color.white)
             .padding(.horizontal, 6)
             .frame(width: plaqueWidth, height: 18)
             .background(
                 Capsule(style: .continuous)
-                    .fill(FixedVisualPalette.controlFill(colorScheme))
+                    .fill(FixedVisualPalette.leadershipPlaqueFill(colorScheme))
                     .overlay(
                         Capsule(style: .continuous)
-                            .strokeBorder(visualTokens.accent.primary.color.opacity(0.38), lineWidth: 0.8)
+                            .strokeBorder(visualTokens.accent.primary.color.opacity(0.56), lineWidth: 0.8)
                     )
             )
             .offset(y: imageSize / 2 + 6)

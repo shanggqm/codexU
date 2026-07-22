@@ -8967,6 +8967,10 @@ enum FixedVisualPalette {
             : Color.white.opacity(0.46)
     }
 
+    static func leadershipPlaqueFill(_ colorScheme: ColorScheme) -> Color {
+        Color.black.opacity(colorScheme == .dark ? 0.58 : 0.52)
+    }
+
     static func cardStroke(
         _ colorScheme: ColorScheme,
         elevated: Bool = false,
