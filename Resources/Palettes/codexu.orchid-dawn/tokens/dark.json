@@ -27,6 +27,7 @@
       "#EF82BD",
       "#E9A071"
     ],
+    "modelSeries": ["#B79AF4", "#EF82BD", "#E9A071", "#7FC7E8", "#BDA1F0", "#F1C78A", "#9BD39A", "#D49ACE", "#B9D6E8"],
     "tokenInput": "#C4ACF7",
     "tokenCached": "#EF82BD",
     "tokenOutput": "#E9A071",

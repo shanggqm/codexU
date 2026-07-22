@@ -27,6 +27,7 @@
       "#3E7B5D",
       "#B08A38"
     ],
+    "modelSeries": ["#1F5F83", "#3E7B5D", "#B08A38", "#4B6FA9", "#6A5A8A", "#A96D43", "#3C8A8A", "#6E9766", "#9A6E9A"],
     "tokenInput": "#34789B",
     "tokenCached": "#3E7B5D",
     "tokenOutput": "#B08A38",

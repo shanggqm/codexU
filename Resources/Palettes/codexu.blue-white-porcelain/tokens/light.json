@@ -6,6 +6,7 @@
   },
   "data": {
     "series": ["#164F86", "#4F7774", "#8A6A43"],
+    "modelSeries": ["#164F86", "#4F7774", "#8A6A43", "#A84F4F", "#6A5A9E", "#B47734", "#3D78AE", "#806A56", "#5B8C55"],
     "tokenInput": "#3D78AE", "tokenCached": "#4F7774", "tokenOutput": "#8A6A43",
     "heatmap": ["#0000001A", "#164F8647", "#164F8675", "#164F86B3", "#164F86F5"],
     "zero": "#98989D59", "valueProgress": ["#B5D4E8", "#3D78AE", "#164F86"],

@@ -59,7 +59,8 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 - 下方仪表盘支持今日任务、AI 领导力、用量趋势、项目排行和 Skill 使用视图。AI 领导力始终评估 Codex 与 Claude Code 的合计表现；详情顶部用完整徽章路径展示全部等级节点，分值直接标在进度条上，再以四个核心指标、四维能力、每日 AI 工时/Agent/峰值组合趋势和项目贡献解释得分。
 - 今日任务按事实源自适应组织：Codex 使用“最近活跃、待继续、定时、今日归档”，Claude Code 使用本机 task 的“进行中、待处理、计划中、已完成”；近期活动与归档都不会被包装成仍在执行或成功完成。
 - 任务卡片优先展示标题、工作区、事实时间和可信状态；可确定时显示 automation 下次运行时间，只有存在有效 Session Deep Link 的卡片才提供整卡点击、hover、手型和键盘焦点反馈。
-- 展示最近半年的每日 token 热力图、最近 7 日趋势摘要和同周期变化。
+- Codex 用量趋势展示最近半年的每日 token 热力图和模型活动概览，概览包含当前范围内的用量最高模型、活跃日期数、活跃模型数和范围日均用量；Claude Code 暂不支持模型归因，保留原有近 7 日摘要。
+- 在 Codex 用量趋势下方展示按模型分色的时间序列面积图，默认显示最近 30 天，可切换最近 60/90/180 天；图中同时显示总用量虚线、近 7 日总量、日均和较前 7 日变化。默认显示 Top 8 模型并将其余模型合并为“其他模型”。纵轴可切换 Token 或 API 等效估算费用。粗略线程口径没有费用拆分时，费用模式会明确标记为不可用。
 - 展示最近 7 天与全部项目排行，包含 token、估算价值、线程数和最近活跃时间。
 - 展示工具调用 TOP 列表和 Skill 使用 TOP 列表，帮助判断本地 Codex 工作结构。
 - 以标准 macOS 窗口运行，主窗口默认保持紧凑布局，也可在 820–1280pt 范围内调整宽度；增加宽度不会改变卡片顺序和信息结构，并会恢复上次窗口尺寸。支持 Dock、系统窗口控制、最小化和关闭主窗口后继续后台运行，关闭主窗口会隐藏 Dock 图标并保留菜单栏图标。
@@ -186,7 +187,7 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 - 本机 token 总量：`~/.codex/state_5.sqlite`。
 - 精细 token 拆分：`~/.codex/sessions/**/rollout-*.jsonl` 和 `~/.codex/archived_sessions/*.jsonl` 中的 `token_count` 事件。
 - 今日任务看板：本机 SQLite 中未归档和今日归档的 Codex 线程；两小时活动窗口只表达“最近活跃”，归档只表达记录归档，不代表运行或成功。
-- 用量趋势和项目排行：本机 session `token_count` 事件聚合；缺失精细事件时回退到线程更新时间的粗略口径。
+- 用量趋势和项目排行：本机 session `token_count` 事件聚合；模型曲线优先按同一 session 中、位于 token 事件之前最近的 `turn_context.model` 归因。该 turn context 未记录模型时不会沿用上一轮，而是回退到线程模型。缺失精细事件时，日归因整体回退到线程更新时间的粗略口径；模型面积图在 Codex runtime 中按 Top 8 + 其他模型展示，并叠加全局总用量虚线，费用口径始终是本地 API 等效估算。Claude Code 暂不提供模型归因或模型面积图。
 - 工具和 Skill 使用：本机 session 事件中的工具调用与 Skill 加载记录。
 - 定时任务：`~/.codex/automations/**/automation.toml` 中启用的 automation 元数据；周期、时区和时间足够明确时在本机计算下次运行，规则不完整时不猜测。
 - AI 领导力：Codex 只读取本机线程关系与 `task_started` / `task_complete` 结构事件；Claude Code 只读取 `turn_duration` 与 Subagent 生命周期。ScoreModel v1.3 只让事实或可推导区间进入管理半径、劳动力杠杆、编排能力、自主运行四维得分，估算区间不计分；证据可信度独立展示，不乘入得分。

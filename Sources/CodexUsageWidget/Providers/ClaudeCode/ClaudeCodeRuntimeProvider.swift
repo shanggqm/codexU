@@ -464,6 +464,7 @@ private final class ClaudeCodeTranscriptReader {
             heatmapWeeks: heatmapWeeks,
             heatmapThresholds: thresholds,
             summary: summary,
+            modelTrends: nil,
             month: month,
             projectedMonthCostUSD: projectedMonthCost(monthCost: month.estimatedCostUSD, now: now, calendar: calendar),
             activeDayCount: activeBuckets.count,

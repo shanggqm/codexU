@@ -203,6 +203,39 @@ private func runtimeJSONObject(_ local: LocalUsage) -> [String: Any] {
     }
 
     if let trend = local.usageTrend {
+        let modelTrends: Any = trend.modelTrends.map { trends in
+            trends.map { modelTrend in
+                [
+                    "id": modelTrend.id,
+                    "model": modelTrend.model ?? NSNull(),
+                    "dayCount": modelTrend.dayBuckets.count,
+                    "activeDayCount": modelTrend.activeDayCount,
+                    "sevenDay": runtimeJSONObject(modelTrend.summary.sevenDay),
+                    "dailyAverageTokens": modelTrend.summary.dailyAverageTokens,
+                    "changePercent": runtimeJSONValue(modelTrend.summary.changePercent)
+                ] as [String: Any]
+            }
+        } ?? NSNull()
+        let modelSeries: Any = trend.modelTrends.map { _ in
+            ModelUsageAreaSeriesBuilder.build(from: trend).map { series in
+                [
+                    "id": series.id,
+                    "model": runtimeJSONValue(series.model),
+                    "isAggregate": series.isAggregate,
+                    "dayCount": series.dayBuckets.count,
+                    "activeDayCount": series.activeDayCount,
+                    "sourceQuality": series.sourceQuality.rawValue,
+                    "costAvailable": series.costAvailable,
+                    "dayBuckets": series.dayBuckets.map { bucket in
+                        [
+                            "day": bucket.id,
+                            "tokens": bucket.tokens,
+                            "estimatedCostUSD": runtimeJSONValue(series.costAvailable ? bucket.usage.estimatedCostUSD : nil)
+                        ] as [String: Any]
+                    }
+                ] as [String: Any]
+            }
+        } ?? NSNull()
         object["usageTrend"] = [
             "sourceQuality": trend.sourceQuality.rawValue,
             "dayCount": trend.dayBuckets.count,
@@ -216,6 +249,9 @@ private func runtimeJSONObject(_ local: LocalUsage) -> [String: Any] {
                     "estimatedCostUSD": bucket.usage.estimatedCostUSD
                 ] as [String: Any]
             } ?? NSNull(),
+            "modelAttribution": trend.modelTrends == nil ? "unsupported" : "available",
+            "modelTrends": modelTrends,
+            "modelSeries": modelSeries,
             "changePercent": runtimeJSONValue(trend.summary.changePercent),
             "isNewActivity": trend.summary.isNewActivity,
             "month": runtimeJSONObject(trend.month),

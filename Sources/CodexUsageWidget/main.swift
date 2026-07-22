@@ -180,11 +180,22 @@ struct UsageTrendSummary: Equatable, Codable {
     let isNewActivity: Bool
 }
 
+struct ModelUsageTrend: Identifiable, Equatable, Codable {
+    let id: String
+    let model: String?
+    let dayBuckets: [UsageDayBucket]
+    let summary: UsageTrendSummary
+    let activeDayCount: Int
+}
+
 struct UsageTrend: Equatable, Codable {
     let dayBuckets: [UsageDayBucket]
     let heatmapWeeks: [[UsageHeatmapDay]]
     let heatmapThresholds: [Int64]
     let summary: UsageTrendSummary
+    // `nil` means this runtime does not support model attribution; an empty
+    // array means attribution is supported but no model record was found.
+    let modelTrends: [ModelUsageTrend]?
     let month: PricedTokenUsage
     let projectedMonthCostUSD: Double?
     let activeDayCount: Int
@@ -430,6 +441,7 @@ private struct SessionUsageSource {
 private struct SessionUsageDelta: Codable {
     let date: Date
     let tokens: TokenBreakdown
+    let model: String?
     let eventIdentity: CodexTokenEventIdentity
 }
 
@@ -1137,8 +1149,8 @@ final class UsageStore: ObservableObject {
 
 final class CodexUsageReader {
     private let fileManager = FileManager.default
-    private let localAnalyticsCacheVersion = 10
-    private let sessionUsageCacheVersion = 7
+    private let localAnalyticsCacheVersion = 11
+    private let sessionUsageCacheVersion = 8
     private static let memorySessionUsageCacheLimit = 64
     private static let persistentSessionUsageCacheLimit = 1_024
     private static let maximumPersistentCacheBytes: Int64 = 128 * 1_024 * 1_024
@@ -1850,6 +1862,8 @@ final class CodexUsageReader {
 
         var accumulator = DetailedUsageAccumulator()
         var dailyUsage: [String: PricedTokenUsage] = [:]
+        var dailyUsageByModel: [String: [String: PricedTokenUsage]] = [:]
+        var modelNamesByID: [String: String] = [:]
         var recentProjectUsage: [String: ProjectUsageAccumulator] = [:]
         var toolUsage: [String: ToolUsageAccumulator] = [:]
         var skillUsage: [String: SkillUsageAccumulator] = [:]
@@ -1900,9 +1914,10 @@ final class CodexUsageReader {
                 accumulator.tokenEventCount += max(entry.tokenEventCount - inheritedPrefixLength, 0)
             }
 
-            let price = modelTokenPrice(for: source.model)
             var sessionUsage = PricedTokenUsage.zero
             for delta in effectiveDeltas {
+                let model = resolvedModelUsageName(turnContextModel: delta.model, threadModel: source.model)
+                let price = modelTokenPrice(for: model)
                 let cost = estimatedCostUSD(tokens: delta.tokens, price: price)
                 sessionUsage.add(tokens: delta.tokens, costUSD: cost)
                 accumulator.add(
@@ -1919,6 +1934,16 @@ final class CodexUsageReader {
                     var usage = dailyUsage[key] ?? .zero
                     usage.add(tokens: delta.tokens, costUSD: cost)
                     dailyUsage[key] = usage
+
+                    let modelID = modelUsageIdentifier(for: model)
+                    var modelUsage = dailyUsageByModel[modelID] ?? [:]
+                    var modelDayUsage = modelUsage[key] ?? .zero
+                    modelDayUsage.add(tokens: delta.tokens, costUSD: cost)
+                    modelUsage[key] = modelDayUsage
+                    dailyUsageByModel[modelID] = modelUsage
+                    if let model {
+                        modelNamesByID[modelID] = model
+                    }
                 }
 
                 if delta.date >= sevenDayStart {
@@ -1995,7 +2020,9 @@ final class CodexUsageReader {
                 sevenDayStart: sevenDayStart,
                 trendStart: trendStart,
                 monthStart: monthStart,
-                sourceQuality: .detailed
+                sourceQuality: .detailed,
+                modelDailyUsage: dailyUsageByModel,
+                modelNamesByID: modelNamesByID
             ),
             recentProjects: recentProjectUsage.values
                 .map { $0.makeUsage() }
@@ -2024,7 +2051,9 @@ final class CodexUsageReader {
         sevenDayStart: Date,
         trendStart: Date,
         monthStart: Date,
-        sourceQuality: UsageSourceQuality
+        sourceQuality: UsageSourceQuality,
+        modelDailyUsage: [String: [String: PricedTokenUsage]] = [:],
+        modelNamesByID: [String: String] = [:]
     ) -> UsageTrend {
         let calendar = Calendar.current
         var buckets: [UsageDayBucket] = []
@@ -2088,6 +2117,33 @@ final class CodexUsageReader {
             weekCount: 26,
             calendar: calendar
         )
+        let modelTrends = modelDailyUsage.compactMap { modelID, usage -> ModelUsageTrend? in
+            let modelTrend = makeUsageTrend(
+                dailyUsage: usage,
+                dayStart: dayStart,
+                sevenDayStart: sevenDayStart,
+                trendStart: trendStart,
+                monthStart: monthStart,
+                sourceQuality: sourceQuality
+            )
+            guard modelTrend.activeDayCount > 0 else { return nil }
+            return ModelUsageTrend(
+                id: modelID,
+                model: modelNamesByID[modelID],
+                dayBuckets: modelTrend.dayBuckets,
+                summary: modelTrend.summary,
+                activeDayCount: modelTrend.activeDayCount
+            )
+        }
+        .sorted { lhs, rhs in
+            let lhsRecent = lhs.summary.sevenDay.tokens.visibleTotalTokens
+            let rhsRecent = rhs.summary.sevenDay.tokens.visibleTotalTokens
+            if lhsRecent != rhsRecent { return lhsRecent > rhsRecent }
+            let lhsTotal = lhs.dayBuckets.reduce(Int64(0)) { $0 + $1.tokens }
+            let rhsTotal = rhs.dayBuckets.reduce(Int64(0)) { $0 + $1.tokens }
+            if lhsTotal != rhsTotal { return lhsTotal > rhsTotal }
+            return (lhs.model ?? "") < (rhs.model ?? "")
+        }
 
         return UsageTrend(
             dayBuckets: buckets,
@@ -2100,6 +2156,7 @@ final class CodexUsageReader {
                 changePercent: changePercent,
                 isNewActivity: isNewActivity
             ),
+            modelTrends: modelTrends,
             month: month,
             projectedMonthCostUSD: projectedMonthCostUSD,
             activeDayCount: buckets.filter { $0.tokens > 0 }.count,
@@ -2186,7 +2243,7 @@ final class CodexUsageReader {
         let monthStart = calendar.date(from: monthComponents) ?? dayStart
 
         let query = """
-        SELECT id, updated_at AS updatedAt, tokens_used AS tokens
+        SELECT id, updated_at AS updatedAt, tokens_used AS tokens, model
         FROM threads
         WHERE updated_at >= \(Int(trendStart.timeIntervalSince1970))
         ORDER BY updated_at ASC;
@@ -2196,24 +2253,35 @@ final class CodexUsageReader {
         guard !rows.isEmpty else { return nil }
 
         var dailyUsage: [String: PricedTokenUsage] = [:]
+        var dailyUsageByModel: [String: [String: PricedTokenUsage]] = [:]
+        var modelNamesByID: [String: String] = [:]
         for row in rows {
             guard let updatedAt = dateFromEpoch(row["updatedAt"]) else { continue }
             let key = localDayKey(updatedAt, calendar: calendar)
             let rawTokens = int64Value(row["tokens"]) ?? 0
             let threadId = row["id"] as? String ?? ""
             let tokens = max(rawTokens - (forkBaselines[threadId] ?? 0), 0)
-            var usage = dailyUsage[key] ?? .zero
-            usage.add(
-                tokens: TokenBreakdown(
-                    inputTokens: 0,
-                    cachedInputTokens: 0,
-                    outputTokens: 0,
-                    reasoningOutputTokens: 0,
-                    totalTokens: tokens
-                ),
-                costUSD: 0
+            let tokenBreakdown = TokenBreakdown(
+                inputTokens: 0,
+                cachedInputTokens: 0,
+                outputTokens: 0,
+                reasoningOutputTokens: 0,
+                totalTokens: tokens
             )
+            var usage = dailyUsage[key] ?? .zero
+            usage.add(tokens: tokenBreakdown, costUSD: 0)
             dailyUsage[key] = usage
+
+            let model = normalizedModelUsageName(row["model"] as? String)
+            let modelID = modelUsageIdentifier(for: model)
+            var modelUsage = dailyUsageByModel[modelID] ?? [:]
+            var modelDayUsage = modelUsage[key] ?? .zero
+            modelDayUsage.add(tokens: tokenBreakdown, costUSD: 0)
+            modelUsage[key] = modelDayUsage
+            dailyUsageByModel[modelID] = modelUsage
+            if let model {
+                modelNamesByID[modelID] = model
+            }
         }
 
         return makeUsageTrend(
@@ -2222,7 +2290,9 @@ final class CodexUsageReader {
             sevenDayStart: sevenDayStart,
             trendStart: trendStart,
             monthStart: monthStart,
-            sourceQuality: .approximate
+            sourceQuality: .approximate,
+            modelDailyUsage: dailyUsageByModel,
+            modelNamesByID: modelNamesByID
         )
     }
 
@@ -2359,8 +2429,9 @@ final class CodexUsageReader {
             return cached
         }
 
-        let eventPattern = #""type":"(session_meta|token_count|function_call|custom_tool_call)""#
+        let eventPattern = #""type":"(session_meta|turn_context|token_count|function_call|custom_tool_call)""#
         let sessionMetaNeedle = Data(#""type":"session_meta""#.utf8)
+        let turnContextNeedle = Data(#""type":"turn_context""#.utf8)
         let tokenCountNeedle = Data(#""type":"token_count""#.utf8)
         let functionCallNeedle = Data(#""type":"function_call""#.utf8)
         let customToolCallNeedle = Data(#""type":"custom_tool_call""#.utf8)
@@ -2368,6 +2439,7 @@ final class CodexUsageReader {
             url: url,
             eventPattern: eventPattern,
             sessionMetaNeedle: sessionMetaNeedle,
+            turnContextNeedle: turnContextNeedle,
             tokenCountNeedle: tokenCountNeedle,
             functionCallNeedle: functionCallNeedle,
             customToolCallNeedle: customToolCallNeedle,
@@ -2393,6 +2465,7 @@ final class CodexUsageReader {
 
         var buffer = Data()
         var forkedFromId: String?
+        var activeModel: String?
         var counterState = CodexTokenCounterState()
         var sawTokenEvent = false
         var tokenEventCount = 0
@@ -2416,12 +2489,14 @@ final class CodexUsageReader {
                     processSessionLine(
                         lineData,
                         sessionMetaNeedle: sessionMetaNeedle,
+                        turnContextNeedle: turnContextNeedle,
                         tokenCountNeedle: tokenCountNeedle,
                         functionCallNeedle: functionCallNeedle,
                         customToolCallNeedle: customToolCallNeedle,
                         fractionalFormatter: fractionalFormatter,
                         plainFormatter: plainFormatter,
                         forkedFromId: &forkedFromId,
+                        activeModel: &activeModel,
                         counterState: &counterState,
                         sawTokenEvent: &sawTokenEvent,
                         tokenEventCount: &tokenEventCount,
@@ -2442,12 +2517,14 @@ final class CodexUsageReader {
             processSessionLine(
                 buffer,
                 sessionMetaNeedle: sessionMetaNeedle,
+                turnContextNeedle: turnContextNeedle,
                 tokenCountNeedle: tokenCountNeedle,
                 functionCallNeedle: functionCallNeedle,
                 customToolCallNeedle: customToolCallNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
                 forkedFromId: &forkedFromId,
+                activeModel: &activeModel,
                 counterState: &counterState,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
@@ -2503,6 +2580,7 @@ final class CodexUsageReader {
         url: URL,
         eventPattern: String,
         sessionMetaNeedle: Data,
+        turnContextNeedle: Data,
         tokenCountNeedle: Data,
         functionCallNeedle: Data,
         customToolCallNeedle: Data,
@@ -2541,6 +2619,7 @@ final class CodexUsageReader {
 
         var buffer = data
         var forkedFromId: String?
+        var activeModel: String?
         var counterState = CodexTokenCounterState()
         var sawTokenEvent = false
         var tokenEventCount = 0
@@ -2554,12 +2633,14 @@ final class CodexUsageReader {
             processSessionLine(
                 lineData,
                 sessionMetaNeedle: sessionMetaNeedle,
+                turnContextNeedle: turnContextNeedle,
                 tokenCountNeedle: tokenCountNeedle,
                 functionCallNeedle: functionCallNeedle,
                 customToolCallNeedle: customToolCallNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
                 forkedFromId: &forkedFromId,
+                activeModel: &activeModel,
                 counterState: &counterState,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
@@ -2573,12 +2654,14 @@ final class CodexUsageReader {
             processSessionLine(
                 buffer,
                 sessionMetaNeedle: sessionMetaNeedle,
+                turnContextNeedle: turnContextNeedle,
                 tokenCountNeedle: tokenCountNeedle,
                 functionCallNeedle: functionCallNeedle,
                 customToolCallNeedle: customToolCallNeedle,
                 fractionalFormatter: fractionalFormatter,
                 plainFormatter: plainFormatter,
                 forkedFromId: &forkedFromId,
+                activeModel: &activeModel,
                 counterState: &counterState,
                 sawTokenEvent: &sawTokenEvent,
                 tokenEventCount: &tokenEventCount,
@@ -2594,12 +2677,14 @@ final class CodexUsageReader {
     private func processSessionLine(
         _ lineData: Data,
         sessionMetaNeedle: Data,
+        turnContextNeedle: Data,
         tokenCountNeedle: Data,
         functionCallNeedle: Data,
         customToolCallNeedle: Data,
         fractionalFormatter: ISO8601DateFormatter,
         plainFormatter: ISO8601DateFormatter,
         forkedFromId: inout String?,
+        activeModel: inout String?,
         counterState: inout CodexTokenCounterState,
         sawTokenEvent: inout Bool,
         tokenEventCount: inout Int,
@@ -2608,9 +2693,10 @@ final class CodexUsageReader {
         skillLoads: inout [SkillLoadEvent]
     ) {
         let isSessionMeta = lineData.range(of: sessionMetaNeedle) != nil
+        let isTurnContext = lineData.range(of: turnContextNeedle) != nil
         let isTokenEvent = lineData.range(of: tokenCountNeedle) != nil
         let isToolEvent = lineData.range(of: functionCallNeedle) != nil || lineData.range(of: customToolCallNeedle) != nil
-        guard isSessionMeta || isTokenEvent || isToolEvent,
+        guard isSessionMeta || isTurnContext || isTokenEvent || isToolEvent,
               let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
               let payload = object["payload"] as? [String: Any]
         else { return }
@@ -2619,6 +2705,11 @@ final class CodexUsageReader {
             if let parentId = payload["forked_from_id"] as? String, !parentId.isEmpty {
                 forkedFromId = parentId
             }
+            return
+        }
+
+        if object["type"] as? String == "turn_context" {
+            applyTurnContextModel(payload["model"] as? String, to: &activeModel)
             return
         }
 
@@ -2663,6 +2754,7 @@ final class CodexUsageReader {
             SessionUsageDelta(
                 date: date,
                 tokens: delta,
+                model: activeModel,
                 eventIdentity: CodexTokenEventIdentity(
                     cumulative: cumulativeSample,
                     lastUsage: lastUsageSample
@@ -3303,6 +3395,24 @@ private func modelTokenPrice(for model: String?) -> ModelTokenPrice {
     return ModelTokenPrice(model: "gpt-5.5", inputPerMillion: 5, cachedInputPerMillion: 0.5, outputPerMillion: 30)
 }
 
+func normalizedModelUsageName(_ model: String?) -> String? {
+    guard let model else { return nil }
+    let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines)
+    return normalized.isEmpty ? nil : normalized
+}
+
+func applyTurnContextModel(_ turnContextModel: String?, to activeModel: inout String?) {
+    activeModel = normalizedModelUsageName(turnContextModel)
+}
+
+func modelUsageIdentifier(for model: String?) -> String {
+    normalizedModelUsageName(model)?.lowercased() ?? "unrecorded-model"
+}
+
+func resolvedModelUsageName(turnContextModel: String?, threadModel: String?) -> String? {
+    normalizedModelUsageName(turnContextModel) ?? normalizedModelUsageName(threadModel)
+}
+
 private func estimatedCostUSD(tokens: TokenBreakdown, price: ModelTokenPrice) -> Double {
     let uncachedInputCost = Double(tokens.uncachedInputTokens) / 1_000_000 * price.inputPerMillion
     let cachedInputCost = Double(tokens.billableCachedInputTokens) / 1_000_000 * price.cachedInputPerMillion
@@ -3540,6 +3650,12 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    @Published var usageTrendWindow: UsageTrendWindow {
+        didSet {
+            usageTrendWindow.persist(defaults: defaults)
+        }
+    }
+
     @Published private(set) var paletteID: String
     @Published private(set) var paletteFallbackNotice: PaletteFallbackNotice?
 
@@ -3598,6 +3714,7 @@ final class AppSettings: ObservableObject {
         language = WidgetLanguage.storedOrAutomatic(defaults: defaults)
         themeMode = WidgetThemeMode.storedOrAutomatic(defaults: defaults)
         particleAnimationMode = ParticleAnimationMode.storedOrDefault(defaults: defaults)
+        usageTrendWindow = UsageTrendWindow.storedOrDefault(defaults: defaults)
         keepMainWindowOnTop = defaults.bool(forKey: Self.keepMainWindowOnTopKey)
         if defaults.object(forKey: Self.keepRunningWhenMainWindowClosedKey) == nil {
             keepRunningWhenMainWindowClosed = true
@@ -4036,7 +4153,8 @@ struct UsageWidgetView: View {
             UsageTrendPanel(
                 trend: snapshot.local?.usageTrend,
                 runtimeScope: store.selectedRuntimeScope,
-                language: language
+                language: language,
+                window: $settings.usageTrendWindow
             )
         case .projects:
             ProjectBoardPanel(
@@ -7303,33 +7421,35 @@ struct ChartTooltipView: View {
     @Environment(\.colorScheme) private var colorScheme
     let payload: ChartTooltipPayload
     var prefersOpaqueSurface = false
+    var compact = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: compact ? 3 : 6) {
             Text(payload.title)
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(.system(size: compact ? 9.5 : 10.5, weight: .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
-            VStack(spacing: 4) {
+            VStack(spacing: compact ? 2 : 4) {
                 ForEach(payload.rows) { row in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: compact ? 6 : 8) {
                         Text(row.label)
-                            .font(.system(size: 9, weight: .medium))
+                            .font(.system(size: compact ? 8 : 9, weight: .medium))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                        Spacer(minLength: 8)
+                            .minimumScaleFactor(compact ? 0.78 : 1)
+                        Spacer(minLength: compact ? 6 : 8)
                         Text(row.value)
-                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .font(.system(size: compact ? 8 : 9, weight: .semibold, design: .rounded))
                             .monospacedDigit()
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-                            .minimumScaleFactor(0.78)
+                            .minimumScaleFactor(compact ? 0.72 : 0.78)
                     }
                 }
             }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 8)
+        .padding(.horizontal, compact ? 8 : 9)
+        .padding(.vertical, compact ? 6 : 8)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(
@@ -7422,39 +7542,920 @@ struct UsageTrendPanel: View {
     let trend: UsageTrend?
     let runtimeScope: RuntimeScope
     let language: WidgetLanguage
+    @Binding var window: UsageTrendWindow
 
     var body: some View {
         if let trend {
-            GeometryReader { geometry in
-                HStack(alignment: .top, spacing: usageTrendCardSpacing) {
-                    UsageHeatmapCard(trend: trend, runtimeScope: runtimeScope, language: language)
-                        .frame(
-                            width: usageTrendHeatmapCardWidth(
-                                containerWidth: geometry.size.width,
-                                weekCount: trend.heatmapWeeks.count
-                            ),
-                            height: usageTrendCardHeight,
-                            alignment: .topLeading
-                        )
-                    UsageSevenDaySummaryCard(trend: trend, runtimeScope: runtimeScope, language: language)
-                        .frame(
-                            width: usageTrendSevenDayCardWidth(
-                                containerWidth: geometry.size.width,
-                                weekCount: trend.heatmapWeeks.count
-                            ),
-                            height: usageTrendCardHeight,
-                            alignment: .topLeading
-                        )
+            VStack(alignment: .leading, spacing: usageTrendCardSpacing) {
+                GeometryReader { geometry in
+                    HStack(alignment: .top, spacing: usageTrendCardSpacing) {
+                        UsageHeatmapCard(trend: trend, runtimeScope: runtimeScope, language: language)
+                            .frame(
+                                width: usageTrendHeatmapCardWidth(
+                                    containerWidth: geometry.size.width,
+                                    weekCount: trend.heatmapWeeks.count
+                                ),
+                                height: usageTrendCardHeight,
+                                alignment: .topLeading
+                            )
+                        if showsModelAttribution(for: trend) {
+                            ModelActivityOverviewCard(
+                                trend: trend,
+                                language: language,
+                                window: window
+                            )
+                                .frame(
+                                    width: usageTrendSevenDayCardWidth(
+                                        containerWidth: geometry.size.width,
+                                        weekCount: trend.heatmapWeeks.count
+                                    ),
+                                    height: usageTrendCardHeight,
+                                    alignment: .topLeading
+                                )
+                        } else {
+                            UsageSevenDaySummaryCard(
+                                trend: trend,
+                                runtimeScope: runtimeScope,
+                                language: language
+                            )
+                                .frame(
+                                    width: usageTrendSevenDayCardWidth(
+                                        containerWidth: geometry.size.width,
+                                        weekCount: trend.heatmapWeeks.count
+                                    ),
+                                    height: usageTrendCardHeight,
+                                    alignment: .topLeading
+                                )
+                        }
+                    }
+                }
+                .frame(height: usageTrendCardHeight)
+
+                if showsModelAttribution(for: trend) {
+                    ModelUsageAreaChartCard(
+                        trend: trend,
+                        runtimeScope: runtimeScope,
+                        language: language,
+                        window: $window
+                    )
+                        .frame(height: usageTrendAreaChartHeight)
                 }
             }
-            .frame(height: usageTrendCardHeight)
+            .frame(height: usageTrendPanelHeight(showsModelAreaChart: showsModelAttribution(for: trend)))
         } else {
             AnalyticsEmptyState(
                 systemName: "chart.bar.doc.horizontal",
                 title: language.text("暂无用量趋势", "No usage trend"),
-                detail: language.text("完成一次 Codex 会话后，这里会显示最近半年的每日 token 热力图。", "After one Codex session, this panel shows a daily token heatmap for the last six months.")
+                detail: language.text("完成一次 Codex 会话后，这里会显示最近半年的每日 token 热力图和模型趋势。", "After one Codex session, this panel shows a daily token heatmap and model trend for the last six months.")
             )
         }
+    }
+
+    private func showsModelAttribution(for trend: UsageTrend) -> Bool {
+        runtimeScope == .codex && trend.modelTrends != nil
+    }
+}
+
+struct UsageSevenDaySummaryCard: View {
+    let trend: UsageTrend
+    let runtimeScope: RuntimeScope
+    let language: WidgetLanguage
+
+    var body: some View {
+        DashboardCard {
+            VStack(alignment: .leading, spacing: dashboardCardContentSpacing) {
+                DashboardCardHeader(
+                    title: language.text("最近 7 日", "Last 7 days"),
+                    systemName: "chart.xyaxis.line"
+                ) {
+                    Text(changeText)
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(changeTint)
+                        .lineLimit(1)
+                }
+
+                SevenDayLineChart(buckets: lastSevenDayBuckets, runtimeScope: runtimeScope, language: language)
+                    .frame(height: 116)
+
+                Spacer(minLength: 0)
+
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(formatTokens(trend.summary.sevenDay.tokens.visibleTotalTokens))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                    Text(language.text("总量", "total"))
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(language.text("日均 \(formatTokens(trend.summary.dailyAverageTokens))", "avg \(formatTokens(trend.summary.dailyAverageTokens))"))
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private var lastSevenDayBuckets: [UsageDayBucket] {
+        Array(trend.dayBuckets.suffix(7))
+    }
+
+    private var changeText: String {
+        if trend.summary.isNewActivity {
+            return language.text("新增", "New")
+        }
+        guard let change = trend.summary.changePercent else { return "--" }
+        return formatSignedPercent(change)
+    }
+
+    private var changeTint: Color {
+        if trend.summary.isNewActivity { return FixedVisualPalette.statusSuccess }
+        guard let change = trend.summary.changePercent else { return FixedVisualPalette.statusNeutral }
+        return change >= 0 ? FixedVisualPalette.statusSuccess : FixedVisualPalette.statusWarning
+    }
+}
+
+struct SevenDayLineChart: View {
+    let buckets: [UsageDayBucket]
+    let runtimeScope: RuntimeScope
+    let language: WidgetLanguage
+    @State private var hoveredBucket: UsageDayBucket?
+    @State private var hoverAnchor: CGPoint = .zero
+    @Environment(\.visualTokens) private var visualTokens
+
+    private var maxTokens: Int64 {
+        max(buckets.map(\.tokens).max() ?? 0, 1)
+    }
+
+    var body: some View {
+        VStack(spacing: 5) {
+            GeometryReader { geometry in
+                let points = chartPoints(size: geometry.size)
+                ZStack {
+                    VStack(spacing: 0) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            Rectangle()
+                                .fill(FixedVisualPalette.surfaceTrack.opacity(0.45))
+                                .frame(height: 1)
+                            Spacer()
+                        }
+                    }
+
+                    Path { path in
+                        guard let first = points.first else { return }
+                        path.move(to: first)
+                        for point in points.dropFirst() {
+                            path.addLine(to: point)
+                        }
+                    }
+                    .stroke(
+                        visualTokens.data.series[1].color,
+                        style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round)
+                    )
+
+                    ForEach(Array(points.enumerated()), id: \.offset) { index, point in
+                        Circle()
+                            .fill(buckets[index].tokens > 0 ? visualTokens.data.series[1].color : FixedVisualPalette.surfaceTrack)
+                            .frame(width: hoveredBucket?.id == buckets[index].id ? 8 : 6, height: hoveredBucket?.id == buckets[index].id ? 8 : 6)
+                            .position(point)
+                            .accessibilityLabel(dayTooltip(buckets[index]))
+                    }
+
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.001))
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                updateHover(location: location, points: points)
+                            case .ended:
+                                hoveredBucket = nil
+                            }
+                        }
+
+                    if let hoveredBucket {
+                        let payload = dayTooltipPayload(hoveredBucket)
+                        ChartTooltipView(payload: payload)
+                            .frame(width: chartTooltipWidth)
+                            .position(chartTooltipPosition(
+                                anchor: hoverAnchor,
+                                containerSize: geometry.size,
+                                rowCount: payload.rows.count
+                            ))
+                            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                            .zIndex(10)
+                    }
+                }
+            }
+
+            HStack(spacing: 0) {
+                ForEach(buckets) { bucket in
+                    Text(shortWeekdayText(bucket.date, language: language))
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private func chartPoints(size: CGSize) -> [CGPoint] {
+        guard !buckets.isEmpty else { return [] }
+        let horizontalPadding: CGFloat = 4
+        let verticalPadding: CGFloat = 8
+        let availableWidth = max(1, size.width - horizontalPadding * 2)
+        let availableHeight = max(1, size.height - verticalPadding * 2)
+        return buckets.enumerated().map { index, bucket in
+            let x = horizontalPadding + availableWidth * CGFloat(index) / CGFloat(max(buckets.count - 1, 1))
+            let ratio = Double(bucket.tokens) / Double(maxTokens)
+            let y = verticalPadding + availableHeight * CGFloat(1 - max(0, min(1, ratio)))
+            return CGPoint(x: x, y: y)
+        }
+    }
+
+    private func updateHover(location: CGPoint, points: [CGPoint]) {
+        guard let index = nearestPointIndex(to: location.x, points: points),
+              buckets.indices.contains(index)
+        else { return }
+        hoveredBucket = buckets[index]
+        hoverAnchor = points[index]
+    }
+
+    private func nearestPointIndex(to x: CGFloat, points: [CGPoint]) -> Int? {
+        points.enumerated()
+            .min { left, right in
+                abs(left.element.x - x) < abs(right.element.x - x)
+            }?
+            .offset
+    }
+
+    private func dayTooltip(_ bucket: UsageDayBucket) -> String {
+        "\(fullDateText(bucket.date, language: language)) · \(formatTokens(bucket.tokens)) tokens"
+    }
+
+    private func dayTooltipPayload(_ bucket: UsageDayBucket) -> ChartTooltipPayload {
+        usageTooltipPayload(
+            date: bucket.date,
+            usage: bucket.usage,
+            runtimeScope: runtimeScope,
+            sourceQuality: bucket.sourceQuality,
+            language: language
+        )
+    }
+}
+
+struct ModelUsageAreaChartCard: View {
+    let trend: UsageTrend
+    let runtimeScope: RuntimeScope
+    let language: WidgetLanguage
+    @Binding var window: UsageTrendWindow
+    @State private var metric: UsageTrendMetric = .tokens
+    @Environment(\.visualTokens) private var visualTokens
+
+    private var series: [ModelUsageAreaSeries] {
+        ModelUsageAreaSeriesBuilder.build(from: trend, window: window)
+    }
+
+    private var totalBuckets: [UsageDayBucket] {
+        ModelUsageAreaSeriesBuilder.dateBuckets(from: trend, window: window)
+    }
+
+    private var colorMap: ModelUsageSeriesColorMap {
+        ModelUsageSeriesColorMap(series: series, visualTokens: visualTokens)
+    }
+
+    private var costAvailable: Bool {
+        trend.sourceQuality == .detailed && trend.dayBuckets.contains { bucket in
+            bucket.tokens > 0 && bucket.usage.estimatedCostUSD > 0
+        }
+    }
+
+    var body: some View {
+        DashboardCard {
+            VStack(alignment: .leading, spacing: dashboardCardContentSpacing) {
+                DashboardCardHeader(
+                    title: language.text("模型用量趋势", "Model usage trend"),
+                    systemName: "chart.xyaxis.line"
+                ) {
+                    HStack(spacing: 6) {
+                        InfoChip(
+                            title: language.text("口径", "Source"),
+                            value: sourceQualityText(trend.sourceQuality, language: language)
+                        )
+                        Picker("", selection: $window) {
+                            ForEach(UsageTrendWindow.allCases) { option in
+                                Text(windowLabel(option))
+                                    .tag(option)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .controlSize(.mini)
+                        .frame(width: 92, height: dashboardHeaderControlHeight)
+                        .help(windowHelp)
+                        .accessibilityLabel(language.text("趋势时间范围", "Trend time range"))
+                        .accessibilityValue(windowLabel(window))
+                        Picker("", selection: $metric) {
+                            Text(language.text("Token", "Tokens"))
+                                .tag(UsageTrendMetric.tokens)
+                            Text(language.text("估算费用", "Est. cost"))
+                                .tag(UsageTrendMetric.estimatedCostUSD)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .controlSize(.mini)
+                        .frame(width: 148, height: dashboardHeaderControlHeight)
+                        .disabled(!costAvailable)
+                        .help(metricHelp)
+                    }
+                }
+
+                ModelUsageSummaryStrip(
+                    summary: metricSummary,
+                    metric: metric,
+                    language: language
+                )
+
+                if series.isEmpty {
+                    AnalyticsEmptyState(
+                        systemName: "chart.xyaxis.line",
+                        title: language.text("暂无模型记录", "No model records"),
+                        detail: language.text("解析到 token 后，这里会显示不同模型的每日用量。", "Daily model usage appears after token events are parsed.")
+                    )
+                    .frame(maxWidth: .infinity, minHeight: usageTrendAreaPlotHeight)
+                } else {
+                    ModelUsageAreaChart(
+                        series: series,
+                        metric: metric,
+                        runtimeScope: runtimeScope,
+                        language: language,
+                        colorMap: colorMap,
+                        window: window,
+                        totalBuckets: totalBuckets
+                    )
+                    .frame(height: usageTrendAreaPlotHeight)
+
+                    ModelUsageLegend(
+                        series: series,
+                        language: language,
+                        colorMap: colorMap,
+                        showsTotal: true
+                    )
+                        .frame(height: usageTrendLegendHeight)
+                }
+            }
+        }
+        .onChange(of: trend.sourceQuality) { quality in
+            if quality != .detailed {
+                metric = .tokens
+            }
+        }
+        .onChange(of: costAvailable) { available in
+            if !available {
+                metric = .tokens
+            }
+        }
+    }
+
+    private var metricSummary: ModelUsageMetricSummary? {
+        guard metric == .tokens || costAvailable else { return nil }
+        return ModelUsageMetricSummary.make(from: trend, metric: metric)
+    }
+
+    private var metricHelp: String {
+        if costAvailable {
+            return language.text(
+                "切换每日 token 与 API 等效估算费用；费用不代表官方账单。",
+                "Switch between daily tokens and API-equivalent estimated cost; this is not an official bill."
+            )
+        }
+        return language.text(
+            "粗略线程口径没有输入/缓存/输出拆分，估算费用暂不可用。",
+            "Approximate thread data has no input/cache/output split, so estimated cost is unavailable."
+        )
+    }
+
+    private func windowLabel(_ option: UsageTrendWindow) -> String {
+        language.text("最近 \(option.dayCount) 天", "Last \(option.dayCount) days")
+    }
+
+    private var windowHelp: String {
+        language.text(
+            "选择模型面积图的日期范围；数据最多可回溯半年。",
+            "Choose the model area chart range; data is available for up to six months."
+        )
+    }
+}
+
+private struct ModelUsageSummaryStrip: View {
+    let summary: ModelUsageMetricSummary?
+    let metric: UsageTrendMetric
+    let language: WidgetLanguage
+
+    var body: some View {
+        HStack(spacing: 8) {
+            summaryItem(
+                title: language.text("近 7 日", "Last 7 days"),
+                value: summary.map { valueText($0.recentValue) } ?? unavailableText,
+                tint: FixedVisualPalette.statusNeutral
+            )
+            summaryItem(
+                title: language.text("日均", "Daily average"),
+                value: summary.map { valueText($0.dailyAverageValue) } ?? unavailableText,
+                tint: FixedVisualPalette.statusNeutral
+            )
+            summaryItem(
+                title: language.text("较前 7 日", "Vs. previous 7 days"),
+                value: changeText,
+                tint: changeTint
+            )
+        }
+        .frame(height: usageTrendSummaryStripHeight)
+    }
+
+    private var unavailableText: String {
+        language.text("不可用", "Unavailable")
+    }
+
+    private var changeText: String {
+        guard let summary else { return unavailableText }
+        if summary.isNewActivity {
+            return language.text("新增", "New")
+        }
+        guard let change = summary.changePercent else { return "--" }
+        return formatSignedPercent(change)
+    }
+
+    private var changeTint: Color {
+        guard let summary else { return FixedVisualPalette.statusNeutral }
+        if summary.isNewActivity { return FixedVisualPalette.statusSuccess }
+        guard let change = summary.changePercent else { return FixedVisualPalette.statusNeutral }
+        return change >= 0 ? FixedVisualPalette.statusSuccess : FixedVisualPalette.statusWarning
+    }
+
+    private func valueText(_ value: Double) -> String {
+        switch metric {
+        case .tokens:
+            return "\(formatTokens(Int64(value.rounded()))) tokens"
+        case .estimatedCostUSD:
+            return formatUSD(value)
+        }
+    }
+
+    private func summaryItem(title: String, value: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 8.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(FixedVisualPalette.surfaceTrack.opacity(0.62))
+        )
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct ModelUsageSeriesColorMap {
+    let colors: [PaletteColor]
+    private let indexByID: [String: Int]
+
+    init(series: [ModelUsageAreaSeries], visualTokens: ResolvedVisualTokens) {
+        let resolvedColors = visualTokens.data.modelSeries ?? visualTokens.data.series
+        colors = resolvedColors.isEmpty ? [PaletteColor(rgba: 0x2866F7FF)] : resolvedColors
+
+        var available = Set(colors.indices)
+        if series.contains(where: \.isAggregate), let aggregateIndex = colors.indices.last {
+            available.remove(aggregateIndex)
+        }
+
+        var mapping: [String: Int] = [:]
+        for item in series where !item.isAggregate {
+            let preferred = stableModelColorSlot(for: item.id, count: colors.count)
+            let slot: Int
+            if available.contains(preferred) {
+                slot = preferred
+                available.remove(preferred)
+            } else if let fallback = available.sorted().first {
+                slot = fallback
+                available.remove(fallback)
+            } else {
+                slot = preferred
+            }
+            mapping[item.id] = slot
+        }
+        if let aggregate = series.first(where: \.isAggregate), let aggregateIndex = colors.indices.last {
+            mapping[aggregate.id] = aggregateIndex
+        }
+        indexByID = mapping
+    }
+
+    func color(for series: ModelUsageAreaSeries) -> Color {
+        let index = indexByID[series.id] ?? stableModelColorSlot(for: series.id, count: colors.count)
+        return colors[index].color
+    }
+}
+
+private func stableModelColorSlot(for modelID: String, count: Int) -> Int {
+    guard count > 0 else { return 0 }
+    var hash: UInt64 = 1_469_598_103_934_665_603
+    for byte in modelID.utf8 {
+        hash ^= UInt64(byte)
+        hash &*= 1_099_511_628_211
+    }
+    return Int(hash % UInt64(count))
+}
+
+private struct ModelUsageLegend: View {
+    let series: [ModelUsageAreaSeries]
+    let language: WidgetLanguage
+    let colorMap: ModelUsageSeriesColorMap
+    let showsTotal: Bool
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                if showsTotal {
+                    HStack(spacing: 5) {
+                        Path { path in
+                            path.move(to: CGPoint(x: 0, y: 4))
+                            path.addLine(to: CGPoint(x: 16, y: 4))
+                        }
+                        .stroke(
+                            FixedVisualPalette.statusNeutral,
+                            style: StrokeStyle(lineWidth: 1.8, dash: [3, 2])
+                        )
+                        .frame(width: 16, height: 8)
+                        Text(language.text("总用量", "Total usage"))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+
+                ForEach(series) { item in
+                    HStack(spacing: 5) {
+                        Capsule(style: .continuous)
+                            .fill(colorMap.color(for: item))
+                            .frame(width: 16, height: 3)
+                        Text(seriesLabel(item))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
+    private func seriesLabel(_ item: ModelUsageAreaSeries) -> String {
+        if item.isAggregate {
+            return language.text("其他模型", "Other models")
+        }
+        return modelUsageLabel(item.model, language: language)
+    }
+}
+
+private struct ModelUsageAreaChart: View {
+    let series: [ModelUsageAreaSeries]
+    let metric: UsageTrendMetric
+    let runtimeScope: RuntimeScope
+    let language: WidgetLanguage
+    let colorMap: ModelUsageSeriesColorMap
+    let window: UsageTrendWindow
+    let totalBuckets: [UsageDayBucket]
+    @State private var hoveredDayIndex: Int?
+    @State private var hoverAnchor: CGPoint = .zero
+
+    private let plotLeading: CGFloat = 48
+    private let plotTrailing: CGFloat = 8
+    private let plotTop: CGFloat = 8
+    private let plotBottom: CGFloat = 22
+
+    private var referenceBuckets: [UsageDayBucket] {
+        totalBuckets
+    }
+
+    private var maximumValue: Double {
+        max(
+            (
+                series.flatMap { $0.dayBuckets.map { metric.value(for: $0) } }
+                    + totalBuckets.map { metric.value(for: $0) }
+            ).max() ?? 0,
+            1
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            GeometryReader { geometry in
+                let plot = plotRect(in: geometry.size)
+                ZStack(alignment: .topLeading) {
+                    gridView(plot: plot, size: geometry.size)
+
+                    ForEach(series) { item in
+                        seriesLayer(item, plot: plot)
+                    }
+
+                    totalSeriesLayer(plot: plot)
+
+                    if let hoveredDayIndex, referenceBuckets.indices.contains(hoveredDayIndex) {
+                        let x = chartX(index: hoveredDayIndex, plot: plot, count: referenceBuckets.count)
+                        Path { path in
+                            path.move(to: CGPoint(x: x, y: plot.minY))
+                            path.addLine(to: CGPoint(x: x, y: plot.maxY))
+                        }
+                        .stroke(
+                            FixedVisualPalette.surfaceTrack,
+                            style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                        )
+
+                        ForEach(series) { item in
+                            let point = chartPoints(for: item, plot: plot)[hoveredDayIndex]
+                            Circle()
+                                .fill(colorMap.color(for: item))
+                                .frame(width: 7, height: 7)
+                                .position(point)
+                        }
+
+                        let totalPoint = chartPoints(for: totalBuckets, plot: plot)[hoveredDayIndex]
+                        Circle()
+                            .fill(FixedVisualPalette.statusNeutral)
+                            .frame(width: 7, height: 7)
+                            .position(totalPoint)
+                    }
+
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.001))
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                updateHover(location: location, plot: plot)
+                            case .ended:
+                                hoveredDayIndex = nil
+                            }
+                        }
+
+                    if let hoveredDayIndex, referenceBuckets.indices.contains(hoveredDayIndex) {
+                        let payload = tooltipPayload(for: hoveredDayIndex)
+                        let compactTooltip = ChartTooltipLayout.isCompact(rowCount: payload.rows.count)
+                        ChartTooltipView(payload: payload, compact: compactTooltip)
+                            .frame(width: chartTooltipWidth)
+                            .position(
+                                chartTooltipPosition(
+                                    anchor: hoverAnchor,
+                                    containerSize: geometry.size,
+                                    rowCount: payload.rows.count,
+                                    compact: compactTooltip
+                                )
+                            )
+                            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                            .zIndex(10)
+                    }
+                }
+            }
+            .frame(height: max(1, usageTrendAreaPlotHeight - usageTrendAreaAxisHeight - 2))
+
+            axisLabels
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            language.text(
+                "按模型显示最近 \(window.dayCount) 天用量的面积图",
+                "Area chart showing model usage for the last \(window.dayCount) days"
+            )
+        )
+    }
+
+    @ViewBuilder
+    private func seriesLayer(_ item: ModelUsageAreaSeries, plot: CGRect) -> some View {
+        let points = chartPoints(for: item, plot: plot)
+        areaPath(points: points, baseline: plot.maxY)
+            .fill(colorMap.color(for: item).opacity(0.11))
+        linePath(points: points)
+            .stroke(
+                colorMap.color(for: item),
+                style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)
+            )
+    }
+
+    private func totalSeriesLayer(plot: CGRect) -> some View {
+        linePath(points: chartPoints(for: totalBuckets, plot: plot))
+            .stroke(
+                FixedVisualPalette.statusNeutral,
+                style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round, dash: [5, 4])
+            )
+    }
+
+    private func gridView(plot: CGRect, size: CGSize) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(0..<4, id: \.self) { index in
+                let fraction = CGFloat(index) / 3
+                let y = plot.minY + plot.height * fraction
+                Path { path in
+                    path.move(to: CGPoint(x: plot.minX, y: y))
+                    path.addLine(to: CGPoint(x: plot.maxX, y: y))
+                }
+                .stroke(FixedVisualPalette.surfaceTrack.opacity(0.52), lineWidth: 1)
+
+                Text(axisValueText(maximumValue * (1 - Double(fraction))))
+                    .font(.system(size: 8.5, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+                    .frame(width: plotLeading - 6, alignment: .trailing)
+                    .position(x: (plotLeading - 6) / 2, y: y)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
+    private var axisLabels: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                ForEach(axisIndices, id: \.self) { index in
+                    Text(axisDateText(referenceBuckets[index].date))
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .frame(width: 58)
+                        .position(
+                            x: axisX(index: index, width: geometry.size.width),
+                            y: 8
+                        )
+                }
+            }
+        }
+        .frame(height: 16)
+    }
+
+    private var axisIndices: [Int] {
+        guard !referenceBuckets.isEmpty else { return [] }
+        let values = [0, referenceBuckets.count / 4, referenceBuckets.count / 2, (referenceBuckets.count * 3) / 4, referenceBuckets.count - 1]
+        return values.reduce(into: [Int]()) { result, value in
+            if !result.contains(value) {
+                result.append(value)
+            }
+        }
+    }
+
+    private func plotRect(in size: CGSize) -> CGRect {
+        CGRect(
+            x: plotLeading,
+            y: plotTop,
+            width: max(1, size.width - plotLeading - plotTrailing),
+            height: max(1, size.height - plotTop - plotBottom)
+        )
+    }
+
+    private func chartPoints(for item: ModelUsageAreaSeries, plot: CGRect) -> [CGPoint] {
+        guard !referenceBuckets.isEmpty else { return [] }
+        let valuesByID = Dictionary(uniqueKeysWithValues: item.dayBuckets.map { ($0.id, metric.value(for: $0)) })
+        return referenceBuckets.enumerated().map { index, reference in
+            let value = valuesByID[reference.id] ?? 0
+            let ratio = max(0, min(1, value / maximumValue))
+            return CGPoint(
+                x: chartX(index: index, plot: plot, count: referenceBuckets.count),
+                y: plot.maxY - plot.height * CGFloat(ratio)
+            )
+        }
+    }
+
+    private func chartPoints(for buckets: [UsageDayBucket], plot: CGRect) -> [CGPoint] {
+        guard !referenceBuckets.isEmpty else { return [] }
+        let valuesByID = Dictionary(uniqueKeysWithValues: buckets.map { ($0.id, metric.value(for: $0)) })
+        return referenceBuckets.enumerated().map { index, reference in
+            let value = valuesByID[reference.id] ?? 0
+            let ratio = max(0, min(1, value / maximumValue))
+            return CGPoint(
+                x: chartX(index: index, plot: plot, count: referenceBuckets.count),
+                y: plot.maxY - plot.height * CGFloat(ratio)
+            )
+        }
+    }
+
+    private func chartX(index: Int, plot: CGRect, count: Int) -> CGFloat {
+        plot.minX + plot.width * CGFloat(index) / CGFloat(max(count - 1, 1))
+    }
+
+    private func linePath(points: [CGPoint]) -> Path {
+        Path { path in
+            guard let first = points.first else { return }
+            path.move(to: first)
+            for point in points.dropFirst() {
+                path.addLine(to: point)
+            }
+        }
+    }
+
+    private func areaPath(points: [CGPoint], baseline: CGFloat) -> Path {
+        Path { path in
+            guard let first = points.first, let last = points.last else { return }
+            path.move(to: CGPoint(x: first.x, y: baseline))
+            path.addLine(to: first)
+            for point in points.dropFirst() {
+                path.addLine(to: point)
+            }
+            path.addLine(to: CGPoint(x: last.x, y: baseline))
+            path.closeSubpath()
+        }
+    }
+
+    private func updateHover(location: CGPoint, plot: CGRect) {
+        guard !referenceBuckets.isEmpty else { return }
+        let clampedX = max(plot.minX, min(plot.maxX, location.x))
+        let ratio = (clampedX - plot.minX) / max(plot.width, 1)
+        let index = Int((ratio * CGFloat(max(referenceBuckets.count - 1, 0))).rounded())
+        hoveredDayIndex = index
+        hoverAnchor = CGPoint(
+            x: chartX(index: index, plot: plot, count: referenceBuckets.count),
+            y: plot.minY + 18
+        )
+    }
+
+    private func tooltipPayload(for index: Int) -> ChartTooltipPayload {
+        let date = referenceBuckets[index].date
+        var rows = [
+            ChartTooltipRow(
+                id: "total",
+                label: language.text("总用量", "Total usage"),
+                value: metricValueText(metric.value(for: totalBuckets[index]))
+            )
+        ]
+        rows.append(contentsOf: series.map { item in
+            let bucket = item.dayBuckets[index]
+            return ChartTooltipRow(
+                id: item.id,
+                label: seriesLabel(item),
+                value: metricValueText(metric.value(for: bucket))
+            )
+        })
+        rows.append(ChartTooltipRow(
+            id: "runtime",
+            label: language.text("运行时", "Runtime"),
+            value: runtimeScope.displayName
+        ))
+        rows.append(ChartTooltipRow(
+            id: "source",
+            label: language.text("口径", "Source"),
+            value: sourceQualityText(referenceBuckets[index].sourceQuality, language: language)
+        ))
+        return ChartTooltipPayload(title: fullDateText(date, language: language), rows: rows)
+    }
+
+    private func seriesLabel(_ item: ModelUsageAreaSeries) -> String {
+        if item.isAggregate {
+            return language.text("其他模型", "Other models")
+        }
+        return modelUsageLabel(item.model, language: language)
+    }
+
+    private func metricValueText(_ value: Double) -> String {
+        switch metric {
+        case .tokens:
+            return formatTokens(Int64(value.rounded())) + " tokens"
+        case .estimatedCostUSD:
+            return formatUSD(value)
+        }
+    }
+
+    private func axisValueText(_ value: Double) -> String {
+        switch metric {
+        case .tokens:
+            return formatTokens(Int64(value.rounded()))
+        case .estimatedCostUSD:
+            return formatUSD(value)
+        }
+    }
+
+    private func axisDateText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: language.isChinese ? "zh_CN" : "en_US_POSIX")
+        formatter.dateFormat = language.isChinese ? "M/d" : "MMM d"
+        return formatter.string(from: date)
+    }
+
+    private func axisX(index: Int, width: CGFloat) -> CGFloat {
+        let raw = width * CGFloat(index) / CGFloat(max(referenceBuckets.count - 1, 1))
+        let halfLabelWidth: CGFloat = 29
+        return min(max(raw, halfLabelWidth), max(halfLabelWidth, width - halfLabelWidth))
     }
 }
 
@@ -7708,197 +8709,117 @@ struct UsageHeatmapView: View {
     }
 }
 
-struct UsageSevenDaySummaryCard: View {
+struct ModelActivityOverviewCard: View {
     let trend: UsageTrend
-    let runtimeScope: RuntimeScope
     let language: WidgetLanguage
+    let window: UsageTrendWindow
+    @Environment(\.visualTokens) private var visualTokens
+
+    private var visibleBuckets: [UsageDayBucket] {
+        ModelUsageAreaSeriesBuilder.dateBuckets(from: trend, window: window)
+    }
+
+    private var activeModelCount: Int {
+        let visibleIDs = Set(visibleBuckets.map(\.id))
+        return (trend.modelTrends ?? []).filter { modelTrend in
+            modelTrend.dayBuckets.contains { bucket in
+                visibleIDs.contains(bucket.id) && bucket.tokens > 0
+            }
+        }.count
+    }
+
+    private var activeDayCount: Int {
+        visibleBuckets.filter { $0.tokens > 0 }.count
+    }
+
+    private var dailyAverageTokens: Int64 {
+        let totalTokens = visibleBuckets.reduce(Int64(0)) { $0 + $1.tokens }
+        return totalTokens / Int64(max(window.dayCount, 1))
+    }
+
+    private var topModelSeries: ModelUsageAreaSeries? {
+        ModelUsageAreaSeriesBuilder
+            .build(from: trend, window: window)
+            .first(where: { !$0.isAggregate })
+    }
+
+    private var topModelTokens: Int64 {
+        topModelSeries?.dayBuckets.reduce(Int64(0)) { $0 + $1.tokens } ?? 0
+    }
 
     var body: some View {
         DashboardCard {
             VStack(alignment: .leading, spacing: dashboardCardContentSpacing) {
                 DashboardCardHeader(
-                    title: language.text("最近 7 日", "Last 7 days"),
-                    systemName: "chart.xyaxis.line"
+                    title: language.text("模型活动概览", "Model activity"),
+                    systemName: "person.3"
                 ) {
-                    Text(changeText)
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(changeTint)
-                        .lineLimit(1)
+                    InfoChip(
+                        title: language.text("范围", "Range"),
+                        value: windowLabel
+                    )
                 }
 
-                SevenDayLineChart(buckets: lastSevenDayBuckets, runtimeScope: runtimeScope, language: language)
-                    .frame(height: 116)
-
-                Spacer(minLength: 0)
-
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(formatTokens(trend.summary.sevenDay.tokens.visibleTotalTokens))
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                    Text(language.text("总量", "total"))
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text(language.text("日均 \(formatTokens(trend.summary.dailyAverageTokens))", "avg \(formatTokens(trend.summary.dailyAverageTokens))"))
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                VStack(alignment: .leading, spacing: 8) {
+                    activityRow(
+                        title: language.text("用量最高模型", "Top model"),
+                        value: topModelSeries.map { modelUsageLabel($0.model, language: language) }
+                            ?? language.text("暂无模型记录", "No model records"),
+                        detail: topModelSeries.map { _ in "\(formatTokens(topModelTokens)) tokens" }
+                            ?? language.text("暂无可用数据", "No data")
+                    )
+                    activityRow(
+                        title: language.text("活跃日期", "Active days"),
+                        value: "\(activeDayCount) / \(window.dayCount)",
+                        detail: language.text("有 token 记录的日期", "Days with token activity")
+                    )
+                    activityRow(
+                        title: language.text("活跃模型", "Active models"),
+                        value: "\(activeModelCount)",
+                        detail: language.text("当前范围内有用量", "With usage in the selected range")
+                    )
+                    activityRow(
+                        title: language.text("范围日均", "Range avg"),
+                        value: "\(formatTokens(dailyAverageTokens)) tokens",
+                        detail: language.text("按选定日期范围", "Across selected days")
+                    )
                 }
             }
         }
     }
 
-    private var lastSevenDayBuckets: [UsageDayBucket] {
-        Array(trend.dayBuckets.suffix(7))
+    private var windowLabel: String {
+        language.text("最近 \(window.dayCount) 天", "Last \(window.dayCount) days")
     }
 
-    private var changeText: String {
-        if trend.summary.isNewActivity {
-            return language.text("新增", "New")
+    private func activityRow(title: String, value: String, detail: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 62, alignment: .leading)
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Spacer(minLength: 4)
+            Text(detail)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
         }
-        guard let change = trend.summary.changePercent else { return "--" }
-        return formatSignedPercent(change)
-    }
-
-    private var changeTint: Color {
-        if trend.summary.isNewActivity { return FixedVisualPalette.statusSuccess }
-        guard let change = trend.summary.changePercent else { return FixedVisualPalette.statusNeutral }
-        return change >= 0 ? FixedVisualPalette.statusSuccess : FixedVisualPalette.statusWarning
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(visualTokens.data.zero.color.opacity(0.32))
+        )
     }
 }
 
-struct SevenDayLineChart: View {
-    let buckets: [UsageDayBucket]
-    let runtimeScope: RuntimeScope
-    let language: WidgetLanguage
-    @State private var hoveredBucket: UsageDayBucket?
-    @State private var hoverAnchor: CGPoint = .zero
-    @Environment(\.visualTokens) private var visualTokens
-
-    private var maxTokens: Int64 {
-        max(buckets.map(\.tokens).max() ?? 0, 1)
-    }
-
-    var body: some View {
-        VStack(spacing: 5) {
-            GeometryReader { geometry in
-                let points = chartPoints(size: geometry.size)
-                ZStack {
-                    VStack(spacing: 0) {
-                        ForEach(0..<3, id: \.self) { _ in
-                            Rectangle()
-                                .fill(FixedVisualPalette.surfaceTrack.opacity(0.45))
-                                .frame(height: 1)
-                            Spacer()
-                        }
-                    }
-
-                    Path { path in
-                        guard let first = points.first else { return }
-                        path.move(to: first)
-                        for point in points.dropFirst() {
-                            path.addLine(to: point)
-                        }
-                    }
-                    .stroke(
-                        visualTokens.data.series[1].color,
-                        style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round)
-                    )
-
-                    ForEach(Array(points.enumerated()), id: \.offset) { index, point in
-                        ZStack {
-                            Circle()
-                                .fill(buckets[index].tokens > 0 ? visualTokens.data.series[1].color : FixedVisualPalette.surfaceTrack)
-                                .frame(width: hoveredBucket?.id == buckets[index].id ? 8 : 6, height: hoveredBucket?.id == buckets[index].id ? 8 : 6)
-                        }
-                        .position(point)
-                        .accessibilityLabel(dayTooltip(buckets[index]))
-                    }
-
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.001))
-                        .contentShape(Rectangle())
-                        .onContinuousHover { phase in
-                            switch phase {
-                            case .active(let location):
-                                updateHover(location: location, points: points)
-                            case .ended:
-                                hoveredBucket = nil
-                            }
-                        }
-
-                    if let hoveredBucket {
-                        let payload = dayTooltipPayload(hoveredBucket)
-                        ChartTooltipView(payload: payload)
-                            .frame(width: chartTooltipWidth)
-                            .position(chartTooltipPosition(
-                                anchor: hoverAnchor,
-                                containerSize: geometry.size,
-                                rowCount: payload.rows.count
-                            ))
-                            .transition(.opacity.combined(with: .scale(scale: 0.98)))
-                            .zIndex(10)
-                    }
-                }
-            }
-
-            HStack(spacing: 0) {
-                ForEach(buckets) { bucket in
-                    Text(shortWeekdayText(bucket.date, language: language))
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .lineLimit(1)
-                }
-            }
-        }
-    }
-
-    private func chartPoints(size: CGSize) -> [CGPoint] {
-        guard !buckets.isEmpty else { return [] }
-        let horizontalPadding: CGFloat = 4
-        let verticalPadding: CGFloat = 8
-        let availableWidth = max(1, size.width - horizontalPadding * 2)
-        let availableHeight = max(1, size.height - verticalPadding * 2)
-        return buckets.enumerated().map { index, bucket in
-            let x = horizontalPadding + availableWidth * CGFloat(index) / CGFloat(max(buckets.count - 1, 1))
-            let ratio = Double(bucket.tokens) / Double(maxTokens)
-            let y = verticalPadding + availableHeight * CGFloat(1 - max(0, min(1, ratio)))
-            return CGPoint(x: x, y: y)
-        }
-    }
-
-    private func updateHover(location: CGPoint, points: [CGPoint]) {
-        guard let index = nearestPointIndex(to: location.x, points: points),
-              buckets.indices.contains(index)
-        else { return }
-        hoveredBucket = buckets[index]
-        hoverAnchor = points[index]
-    }
-
-    private func nearestPointIndex(to x: CGFloat, points: [CGPoint]) -> Int? {
-        points.enumerated()
-            .min { left, right in
-                abs(left.element.x - x) < abs(right.element.x - x)
-            }?
-            .offset
-    }
-
-    private func dayTooltip(_ bucket: UsageDayBucket) -> String {
-        "\(fullDateText(bucket.date, language: language)) · \(formatTokens(bucket.tokens)) tokens"
-    }
-
-    private func dayTooltipPayload(_ bucket: UsageDayBucket) -> ChartTooltipPayload {
-        usageTooltipPayload(
-            date: bucket.date,
-            usage: bucket.usage,
-            runtimeScope: runtimeScope,
-            sourceQuality: bucket.sourceQuality,
-            language: language
-        )
-    }
+private func modelUsageLabel(_ model: String?, language: WidgetLanguage) -> String {
+    normalizedModelUsageName(model) ?? language.text("未记录模型", "Unrecorded model")
 }
 
 enum ProjectTimeframe: String, CaseIterable, Identifiable {
@@ -9045,6 +9966,11 @@ private let settingsShortcutActionWidth: CGFloat = settingsAccessoryColumnWidth
     - settingsShortcutControlSpacing
 private let usageTrendCardHeight: CGFloat = 214
 private let usageTrendCardSpacing: CGFloat = dashboardGridSpacing
+private let usageTrendAreaChartHeight: CGFloat = 344
+private let usageTrendAreaPlotHeight: CGFloat = 210
+private let usageTrendAreaAxisHeight: CGFloat = 16
+private let usageTrendLegendHeight: CGFloat = 18
+private let usageTrendSummaryStripHeight: CGFloat = 44
 private let usageSevenDayMinimumCardWidth: CGFloat = 260
 private let usageHeatmapCellSpacing: CGFloat = 4
 private let usageHeatmapWeekdayLabelWidth: CGFloat = 20
@@ -9060,22 +9986,54 @@ func runtimeStatusPopoverHeight(for runtimeCount: Int, hasAttention: Bool) -> CG
     return hasAttention ? 430 : 374
 }
 
-private func chartTooltipPosition(anchor: CGPoint, containerSize: CGSize, rowCount: Int) -> CGPoint {
-    let tooltipHeight = CGFloat(38 + rowCount * 17)
-    let margin: CGFloat = 8
-    let x = min(
-        max(anchor.x, chartTooltipWidth / 2 + margin),
-        max(chartTooltipWidth / 2 + margin, containerSize.width - chartTooltipWidth / 2 - margin)
+enum ChartTooltipLayout {
+    static func isCompact(rowCount: Int) -> Bool {
+        rowCount > 8
+    }
+
+    static func estimatedHeight(rowCount: Int, compact: Bool) -> CGFloat {
+        let safeRowCount = max(rowCount, 0)
+        return compact
+            ? CGFloat(30 + safeRowCount * 12)
+            : CGFloat(38 + safeRowCount * 17)
+    }
+
+    static func position(
+        anchor: CGPoint,
+        containerSize: CGSize,
+        rowCount: Int,
+        compact: Bool = false
+    ) -> CGPoint {
+        let tooltipHeight = estimatedHeight(rowCount: rowCount, compact: compact)
+        let margin: CGFloat = 8
+        let x = min(
+            max(anchor.x, chartTooltipWidth / 2 + margin),
+            max(chartTooltipWidth / 2 + margin, containerSize.width - chartTooltipWidth / 2 - margin)
+        )
+        let showBelow = anchor.y < tooltipHeight + margin * 2
+        let rawY = showBelow
+            ? anchor.y + tooltipHeight / 2 + margin
+            : anchor.y - tooltipHeight / 2 - margin
+        let y = min(
+            max(rawY, tooltipHeight / 2 + margin),
+            max(tooltipHeight / 2 + margin, containerSize.height - tooltipHeight / 2 - margin)
+        )
+        return CGPoint(x: x, y: y)
+    }
+}
+
+private func chartTooltipPosition(
+    anchor: CGPoint,
+    containerSize: CGSize,
+    rowCount: Int,
+    compact: Bool = false
+) -> CGPoint {
+    ChartTooltipLayout.position(
+        anchor: anchor,
+        containerSize: containerSize,
+        rowCount: rowCount,
+        compact: compact
     )
-    let showBelow = anchor.y < tooltipHeight + margin * 2
-    let rawY = showBelow
-        ? anchor.y + tooltipHeight / 2 + margin
-        : anchor.y - tooltipHeight / 2 - margin
-    let y = min(
-        max(rawY, tooltipHeight / 2 + margin),
-        max(tooltipHeight / 2 + margin, containerSize.height - tooltipHeight / 2 - margin)
-    )
-    return CGPoint(x: x, y: y)
 }
 
 private func usageHeatmapGridWidth(weekCount: Int) -> CGFloat {
@@ -9112,6 +10070,11 @@ private func usageTrendSevenDayCardWidth(containerWidth: CGFloat, weekCount: Int
             weekCount: weekCount
         )
     )
+}
+
+private func usageTrendPanelHeight(showsModelAreaChart: Bool) -> CGFloat {
+    usageTrendCardHeight
+        + (showsModelAreaChart ? usageTrendCardSpacing + usageTrendAreaChartHeight : 0)
 }
 
 private func localizedDashboardTitle(_ tab: DashboardTab, language: WidgetLanguage) -> String {
@@ -9197,17 +10160,17 @@ private func usageSourceHelp(language: WidgetLanguage) -> String {
     )
 }
 
+private func shortWeekdayText(_ date: Date, language: WidgetLanguage) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: language.isChinese ? "zh_CN" : "en_US_POSIX")
+    formatter.dateFormat = "EEEEE"
+    return formatter.string(from: date)
+}
+
 private func fullDateText(_ date: Date, language: WidgetLanguage) -> String {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: language.isChinese ? "zh_CN" : "en_US_POSIX")
     formatter.dateFormat = language.isChinese ? "M月d日 EEEE" : "MMM d, EEEE"
-    return formatter.string(from: date)
-}
-
-private func shortWeekdayText(_ date: Date, language: WidgetLanguage) -> String {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: language.isChinese ? "zh_CN" : "en_US_POSIX")
-    formatter.dateFormat = language.isChinese ? "E" : "EEE"
     return formatter.string(from: date)
 }
 
@@ -9644,217 +10607,6 @@ private func resetDateTime(_ date: Date, language: WidgetLanguage = .zh) -> Stri
     formatter.locale = Locale(identifier: language.isChinese ? "zh_CN" : "en_US_POSIX")
     formatter.dateFormat = "M/d HH:mm"
     return formatter.string(from: date)
-}
-
-private func isoString(_ date: Date?) -> String? {
-    guard let date else { return nil }
-    let formatter = ISO8601DateFormatter()
-    return formatter.string(from: date)
-}
-
-private func jsonValue<T>(_ value: T?) -> Any {
-    value.map { $0 as Any } ?? NSNull()
-}
-
-private func jsonObject(_ usage: PricedTokenUsage) -> [String: Any] {
-    [
-        "estimatedCostUSD": usage.estimatedCostUSD,
-        "tokens": [
-            "inputTokens": usage.tokens.inputTokens,
-            "cachedInputTokens": usage.tokens.billableCachedInputTokens,
-            "uncachedInputTokens": usage.tokens.uncachedInputTokens,
-            "outputTokens": usage.tokens.outputTokens,
-            "reasoningOutputTokens": usage.tokens.reasoningOutputTokens,
-            "totalTokens": usage.tokens.visibleTotalTokens
-        ] as [String: Any]
-    ]
-}
-
-private func jsonObject(_ project: ProjectUsage) -> [String: Any] {
-    [
-        "name": project.name,
-        "fullPath": project.fullPath,
-        "tokens": project.tokens,
-        "estimatedCostUSD": jsonValue(project.estimatedCostUSD),
-        "threadCount": project.threadCount,
-        "lastActiveAt": jsonValue(isoString(project.lastActiveAt)),
-        "sourceQuality": project.sourceQuality.rawValue
-    ] as [String: Any]
-}
-
-private func jsonObject(_ tool: ToolUsage) -> [String: Any] {
-    [
-        "name": tool.name,
-        "category": tool.category,
-        "callCount": tool.callCount,
-        "estimatedTokens": jsonValue(tool.estimatedTokens),
-        "estimatedCostUSD": jsonValue(tool.estimatedCostUSD)
-    ] as [String: Any]
-}
-
-private func jsonObject(_ skill: SkillUsage) -> [String: Any] {
-    [
-        "name": skill.name,
-        "path": skill.path,
-        "sourceLabel": skill.sourceLabel,
-        "loadCount": skill.loadCount,
-        "threadCount": skill.threadCount,
-        "staticTokenEstimate": jsonValue(skill.staticTokenEstimate),
-        "staticByteCount": jsonValue(skill.staticByteCount),
-        "lastLoadedAt": jsonValue(isoString(skill.lastLoadedAt))
-    ] as [String: Any]
-}
-
-private func dumpJSON(_ snapshot: UsageSnapshot) {
-    var object: [String: Any] = [
-        "refreshedAt": isoString(snapshot.refreshedAt) ?? "",
-        "messages": snapshot.messages
-    ]
-
-    if let account = snapshot.account {
-        object["account"] = [
-            "type": account.type,
-            "planType": jsonValue(account.planType),
-            "emailPresent": account.emailPresent
-        ] as [String: Any]
-    }
-
-    if let primary = snapshot.fiveHourQuota {
-        object["primary"] = [
-            "usedPercent": primary.usedPercent,
-            "remainingPercent": primary.remainingPercent,
-            "windowDurationMins": jsonValue(primary.windowDurationMins),
-            "resetsAt": jsonValue(isoString(primary.resetsAt))
-        ] as [String: Any]
-    }
-
-    if let secondary = snapshot.sevenDayQuota {
-        object["secondary"] = [
-            "usedPercent": secondary.usedPercent,
-            "remainingPercent": secondary.remainingPercent,
-            "windowDurationMins": jsonValue(secondary.windowDurationMins),
-            "resetsAt": jsonValue(isoString(secondary.resetsAt))
-        ] as [String: Any]
-    }
-
-    if let monthly = snapshot.monthlyQuota {
-        object["monthly"] = [
-            "usedPercent": monthly.usedPercent,
-            "remainingPercent": monthly.remainingPercent,
-            "windowDurationMins": jsonValue(monthly.windowDurationMins),
-            "resetsAt": jsonValue(isoString(monthly.resetsAt))
-        ] as [String: Any]
-    }
-
-    if let credits = snapshot.credits {
-        object["credits"] = [
-            "hasCredits": credits.hasCredits,
-            "unlimited": credits.unlimited,
-            "balance": jsonValue(credits.balance),
-            "resetCredits": jsonValue(credits.resetCredits),
-            "resetCreditDetails": credits.resetCreditDetails.map { details in
-                details.map { detail in
-                    ["expiresAt": jsonValue(isoString(detail.expiresAt))]
-                }
-            } ?? NSNull()
-        ] as [String: Any]
-    }
-
-    if let local = snapshot.local {
-        var localObject: [String: Any] = [
-            "todayTokens": local.todayTokens,
-            "sevenDayTokens": local.sevenDayTokens,
-            "lifetimeTokens": local.lifetimeTokens,
-            "threadCount": local.threadCount,
-            "lastUpdatedAt": jsonValue(isoString(local.lastUpdatedAt)),
-            "dailyBuckets": local.dailyBuckets.map { bucket in
-                [
-                    "day": bucket.id,
-                    "label": bucket.label,
-                    "tokens": bucket.tokens
-                ] as [String: Any]
-            }
-        ]
-
-        if let detailed = local.detailedUsage {
-            localObject["detailedUsage"] = [
-                "today": jsonObject(detailed.today),
-                "sevenDay": jsonObject(detailed.sevenDay),
-                "month": jsonObject(detailed.month),
-                "lifetime": jsonObject(detailed.lifetime),
-                "parsedFileCount": detailed.parsedFileCount,
-                "tokenEventCount": detailed.tokenEventCount
-            ] as [String: Any]
-        }
-
-        if let trend = local.usageTrend {
-            localObject["usageTrend"] = [
-                "sourceQuality": trend.sourceQuality.rawValue,
-                "dayCount": trend.dayBuckets.count,
-                "activeDayCount": trend.activeDayCount,
-                "sevenDay": jsonObject(trend.summary.sevenDay),
-                "dailyAverageTokens": trend.summary.dailyAverageTokens,
-                "peakDay": trend.summary.peakDay.map { bucket in
-                    [
-                        "day": bucket.id,
-                        "tokens": bucket.tokens,
-                        "estimatedCostUSD": bucket.usage.estimatedCostUSD
-                    ] as [String: Any]
-                } ?? NSNull(),
-                "changePercent": jsonValue(trend.summary.changePercent),
-                "isNewActivity": trend.summary.isNewActivity,
-                "month": jsonObject(trend.month),
-                "projectedMonthCostUSD": jsonValue(trend.projectedMonthCostUSD)
-            ] as [String: Any]
-        }
-
-        if let projectBoard = local.projectBoard {
-            localObject["projectBoard"] = [
-                "recentProjects": projectBoard.recentProjects.prefix(8).map { jsonObject($0) },
-                "allProjects": projectBoard.allProjects.prefix(8).map { jsonObject($0) }
-            ] as [String: Any]
-        }
-
-        localObject["toolUsages"] = local.toolUsages.prefix(20).map { jsonObject($0) }
-        localObject["skillUsages"] = local.skillUsages.prefix(20).map { jsonObject($0) }
-
-        object["local"] = localObject
-    }
-
-    if let taskBoard = snapshot.taskBoard {
-        object["taskBoard"] = [
-            "refreshedAt": isoString(taskBoard.refreshedAt) ?? "",
-            "totalCount": taskBoard.totalCount,
-            "columns": taskBoard.columns.map { column in
-                [
-                    "id": column.id.rawValue,
-                    "title": column.title,
-                    "count": column.count,
-                    "items": column.items.map { item in
-                        [
-                            "id": item.id,
-                            "code": item.code,
-                            "title": item.title,
-                            "detail": item.detail,
-                            "chip": item.chip,
-                            "sourceKind": item.sourceKind.rawValue,
-                            "displayState": item.displayState.rawValue,
-                            "stateBasis": item.stateBasis.rawValue,
-                            "rawStatus": jsonValue(item.rawStatus),
-                            "nextRunAt": jsonValue(isoString(item.nextRunAt)),
-                            "updatedAt": jsonValue(isoString(item.updatedAt)),
-                            "tokens": jsonValue(item.tokens)
-                        ] as [String: Any]
-                    }
-                ] as [String: Any]
-            }
-        ] as [String: Any]
-    }
-
-    if let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
-       let text = String(data: data, encoding: .utf8) {
-        print(text)
-    }
 }
 
 private func fourCharCode(_ value: String) -> OSType {
@@ -10862,6 +11614,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-token-counter") {
             exit(CodexTokenCounterNormalizerSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-model-usage-trend") {
+            exit(ModelUsageTrendSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--self-test-app-server-pipe") {

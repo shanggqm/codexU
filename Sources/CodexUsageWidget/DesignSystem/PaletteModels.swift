@@ -148,6 +148,7 @@ struct QuotaTokenSet: Codable, Hashable {
 
 struct DataTokenSet: Codable, Hashable {
     let series: [PaletteColor]
+    let modelSeries: [PaletteColor]?
     let tokenInput: PaletteColor
     let tokenCached: PaletteColor
     let tokenOutput: PaletteColor
@@ -264,6 +265,17 @@ struct ResolvedVisualTokens: Hashable {
             ),
             data: DataTokenSet(
                 series: [accent.primary, accent.secondary, accent.highlight],
+                modelSeries: [
+                    accent.primary,
+                    accent.secondary,
+                    accent.highlight,
+                    PaletteColor(rgba: 0x2AA198FF),
+                    PaletteColor(rgba: 0xE07A5FFF),
+                    PaletteColor(rgba: 0xD4A72CFF),
+                    PaletteColor(rgba: 0x5C9DEDFF),
+                    PaletteColor(rgba: 0xB04A8FFF),
+                    PaletteColor(rgba: 0x6FAE75FF)
+                ],
                 tokenInput: PaletteColor(rgba: 0x0A84FFFF),
                 tokenCached: accent.secondary,
                 tokenOutput: PaletteColor(rgba: 0xFF9F0AFF),

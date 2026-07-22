@@ -41,7 +41,7 @@ v0.3.0 的目标是把 codexU 从“额度与任务小组件”升级为“Codex
 In Scope：
 
 - 将“今日任务看板”改为 tab 容器中的默认 tab。
-- 新增“用量趋势”tab，包含半年每日用量热力图和最近 7 日摘要。
+- 新增“用量趋势”tab，包含半年每日用量热力图、模型活动概览，以及带近 7 日摘要的 Codex 专用模型用量面积图。
 - 用量热力图默认展示最近半年，并保持固定周矩阵，必要时删减边缘日期以保证矩阵完整。
 - 新增“项目看板”tab，包含项目用量排行、工具使用 TOP10；工具 token 估算作为 P1 增强能力，可降级。
 - 增加必要的数据口径说明、tooltip、空状态、降级策略。
@@ -61,9 +61,9 @@ Out of Scope：
 
 | 等级 | 信息类型 | 用户价值 | 展示策略 |
 | --- | --- | --- | --- |
-| P0 | 额度剩余、今日任务、半年热力图、近 7 日趋势、项目排行、工具调用次数 | 直接影响用户是否继续发起 Codex 工作 | 主界面或 tab 首屏直接展示 |
+| P0 | 额度剩余、今日任务、半年热力图、模型活动概览、模型总量趋势、项目排行、工具调用次数 | 直接影响用户是否继续发起 Codex 工作 | 主界面或 tab 首屏直接展示 |
 | P1 | 工具 token 估算、成本估算、项目估算价值 | 帮助用户理解使用结构和订阅价值 | tab 内展示，配 tooltip |
-| P2 | 模型/推理档位、归档占比、CLI 版本、动态工具配置 | 排查和复盘有价值，但日常不一定需要 | v0.4 或详情页候选 |
+| P2 | 推理档位、归档占比、CLI 版本、动态工具配置 | 排查和复盘有价值，但日常不一定需要 | v0.4 或详情页候选 |
 | P3 | prompt、tool arguments、附件正文、auth、raw logs | 敏感或噪声高 | 不展示 |
 
 ### 2.2 文案原则
@@ -209,48 +209,72 @@ tooltip 字段：
 - [ ] 色阶图例和实际分档一致。
 - [ ] 窗口宽度 820px 下不横向溢出。
 
-### F3. 用量趋势 Tab：最近 7 日摘要
+### F3. 用量趋势 Tab：模型活动概览
 
 优先级：P0
 
 用户故事：
 
-作为 Codex 用户，我希望在热力图旁边看到最近 7 日的关键摘要，以便快速判断近期使用趋势，而不需要逐格读取。
+作为 Codex 用户，我希望在热力图旁边看到当前日期范围内的模型活动摘要，以便快速判断主要使用模型和活动覆盖，而不需要逐格读取。
 
 功能说明：
 
-- 展示最近 7 日关键指标。
-- 展示最近 7 日折线图。
-- 与前 7 日比较，给出趋势变化。
+- 展示所选日期范围内的用量最高模型。
+- 展示活跃日期数和活跃模型数。
+- 展示按所选日期范围计算的日均用量。
+- 范围与模型用量趋势面积图同步，默认最近 30 天，可选 60/90/180 天。
 
 字段设计：
 
 | 字段 | 中文文案 | 英文文案 | 价值 |
 | --- | --- | --- | --- |
-| sevenDayTokens | 近 7 日 | Last 7 days | 高频使用强度 |
-| dailyAverageTokens | 日均 | Daily avg | 判断稳定使用 |
-| peakDayTokens | 峰值日 | Peak day | 识别异常高峰 |
-| changeVsPrevious7Days | 较前 7 日 | vs prev. 7d | 趋势判断 |
-| sevenDayEstimatedCost | 估算价值 | Est. value | 订阅价值感知 |
+| topModel | 用量最高模型 | Top model | 判断主要使用模型 |
+| activeDayCount | 活跃日期 | Active days | 判断使用连续性 |
+| activeModelCount | 活跃模型 | Active models | 判断模型覆盖范围 |
+| rangeDailyAverageTokens | 范围日均 | Range daily avg | 判断选定范围的平均强度 |
 
 推荐文案：
 
-- `近 7 日 12.4M`
-- `日均 1.8M`
-- `峰值 3.6M · 周三`
-- `较前 7 日 +18%`
+- `用量最高模型 gpt-5.6`
+- `活跃日期 18 / 30`
+- `活跃模型 6`
+- `范围日均 1.8M`
 
 业务规则：
 
-- 趋势变化使用 `(最近7日 - 前7日) / 前7日`。
-- 前 7 日为 0 且最近 7 日大于 0 时显示 `新增使用` / `New activity`。
-- 最近 7 日为 0 时显示 `本周暂无记录` / `No records this week`。
+- 精细模型归因优先读取同一 session 中、位于 `token_count` 事件之前最近的 `turn_context.model`；每次 `turn_context` 都更新当前归因，若其中没有模型字段则清空上一轮模型并回退到 `threads.model`。
+- 当趋势整体使用线程时间回退口径时，模型曲线也按线程模型归因，并继续标注 `粗略统计` / `Approx.`。
 
 验收标准：
 
-- [ ] 摘要指标与热力图同源。
-- [ ] 前 7 日为 0 时不出现除零或异常百分比。
+- [ ] 概览指标与面积图所选日期范围同源。
+- [ ] 只有当前范围内有 token 的模型参与活跃模型统计。
+- [ ] 范围日均按选定日期数计算，不把无记录日期从分母中删除。
 - [ ] 指标文案在中英文下不溢出。
+
+### F3.1. 用量趋势 Tab：模型时间序列面积图
+
+优先级：P0（仅 Codex runtime）
+
+功能说明：
+
+- 在热力图和模型活动概览卡片下方新增全宽模型趋势卡片，默认展示最近 30 天，并允许切换最近 60、90、180 天；热力图仍保持最近半年。
+- 采用非堆叠叠加面积图：每个模型使用独立颜色的半透明面积和折线，共享同一纵轴。
+- 叠加一条中性颜色虚线表示全局每日总用量；卡片摘要同步显示近 7 日总量、日均和较前 7 日变化。
+- 默认按所选日期范围内的 token 总量显示 Top 8 模型；其余模型按日期合并为“其他模型”。模型不足 9 个时不生成聚合序列。
+- 纵轴在 `Token` 与 `估算费用（USD）` 之间切换；费用属于 API 等效估算，不代表官方账单。
+- 精细 token 事件可显示费用；粗略线程口径没有输入/缓存/输出拆分，费用控件禁用并解释原因。
+- 面板只在 Codex runtime 显示模型活动概览和模型序列；Claude Code 的 `modelTrends` 为 `nil`，表示当前不支持模型归因，并保留原有近 7 日摘要，而非显示为 0 个模型。
+
+验收标准：
+
+- [ ] 所有序列共享所选范围的完整日期轴（默认 30 天，可选 60/90/180 天），空闲日期填充为 0，未来日期不绘制。
+- [ ] Top 8 排序按所选范围 token 总量、范围内最近 7 日 token、模型 ID 稳定排序；剩余模型逐日求和正确。
+- [ ] 图例、描边、tooltip 同时显示模型名称，颜色不是唯一信息通道。
+- [ ] 总用量虚线与每日全局用量一致，tooltip 将总用量列为首行。
+- [ ] Token/费用切换不改变序列和日期；粗略口径不显示伪造费用 0。
+- [ ] 近 7 日总量、日均和较前 7 日变化随 Token/费用口径同步计算。
+- [ ] 无模型记录、单模型、超过 8 个模型、浅色/深色和中英文状态均可读且不溢出。
 
 ### F4. 用量趋势 Tab：本月预测与价值解释
 
@@ -263,7 +287,7 @@ tooltip 字段：
 功能说明：
 
 - v0.3.0 不在用量趋势 tab 底部展示本月累计、本月估算和预计月底卡片。
-- 主界面已有“羊毛进度”，用量趋势 tab 优先保持热力图和近 7 日折线图的聚焦表达。
+- 主界面已有“羊毛进度”，用量趋势 tab 优先保持热力图和模型总量趋势的聚焦表达。
 
 字段设计：
 
@@ -423,8 +447,8 @@ tooltip 字段：
 
 | 数据源 | 用途 | 当前状态 |
 | --- | --- | --- |
-| `~/.codex/state_5.sqlite.threads` | 项目、线程、cwd、model、tokens、recency | 已使用，需扩展聚合 |
-| `~/.codex/sessions/**/rollout-*.jsonl` | 精细 token、工具调用、热力图 | 已解析 token，需扩展事件解析 |
+| `~/.codex/state_5.sqlite.threads` | 项目、线程、cwd、model、tokens、recency | 已使用；`model` 作为精细记录缺失时的回退 |
+| `~/.codex/sessions/**/rollout-*.jsonl` | 精细 token、工具调用、模型曲线、热力图 | 已解析 `token_count` 和 `turn_context.model` |
 | `~/.codex/archived_sessions/*.jsonl` | 历史 session | 已用于 token，需纳入趋势 |
 | `~/.codex/sqlite/codex-dev.db.automations` | automation 下一次/上一次运行 | 新增优先读取 |
 | `~/.codex/automations/**/automation.toml` | automation 回退 | 当前已使用 |
@@ -444,6 +468,30 @@ tooltip 字段：
 | reasoningOutputTokens | Int64 | 推理输出 token |
 | estimatedCostUSD | Double | API 等效估算 |
 | sourceQuality | Enum | `detailed` / `approximate` |
+
+#### ModelUsageTrend
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | String | 规范化后的本机模型标识；无记录时为单独占位标识 |
+| model | String? | JSONL `turn_context.model`，缺失时使用线程 `model` |
+| dayBuckets | `[UsageDayBucket]` | 最近半年按天聚合的该模型 token |
+| summary | `UsageTrendSummary` | 该模型最近 7 日、日均和与前 7 日对比 |
+| activeDayCount | Int | 该模型有记录的日期数 |
+
+`UsageTrend.modelTrends` 为可选字段：`nil` 表示当前 Runtime 不支持模型归因；空数组表示支持归因，但当前范围没有可归因的模型记录。
+
+#### ModelUsageAreaSeries
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| id | String | 模型 ID 或 `other-models` |
+| model | String? | 展示用模型名；聚合序列为空 |
+| isAggregate | Bool | 是否为“其他模型”聚合序列 |
+| dayBuckets | `[UsageDayBucket]` | UI 按所选范围派生的日期点；调试 JSON 保留最多半年 |
+| activeDayCount | Int | 有 token 记录的日期数 |
+| sourceQuality | Enum | `detailed` / `approximate` |
+| costAvailable | Bool | 粗略线程口径时为 `false` |
 
 #### ProjectUsage
 
@@ -541,7 +589,7 @@ tooltip 字段：
 ### 7.4 可维护性
 
 - 将数据读取聚合逻辑与 SwiftUI View 解耦。
-- 新增类型命名应围绕业务语义：`UsageDayBucket`、`ProjectUsage`、`ToolUsage`。
+- 新增类型命名应围绕业务语义：`UsageDayBucket`、`ModelUsageTrend`、`ModelUsageAreaSeries`、`ProjectUsage`、`ToolUsage`。
 - 尽量复用现有价格估算逻辑和 token parser。
 
 ## 8. v0.3.0 建议优先级
@@ -550,7 +598,8 @@ P0 必做：
 
 - Tab 容器与默认今日任务 tab。
 - 最近半年每日用量热力图。
-- 最近 7 日摘要。
+- 模型活动概览。
+- Codex 模型用量面积图：Top 8 + 其他模型、总用量虚线、Token/估算费用切换。
 - 项目用量排行：最近 7 天 / 全部。
 - 工具使用 TOP10：调用次数。
 - 数据口径说明与空状态。
@@ -564,7 +613,7 @@ P1 推荐：
 P2 延后：
 
 - 工具失败次数。
-- 模型/推理档位分析。
+- 推理档位分析。
 - Goal 面板。
 - 日志健康面板。
 - 多 agent 子线程图谱。
@@ -584,7 +633,7 @@ P2 延后：
 - [ ] 默认进入今日任务 tab。
 - [ ] 三个 tab 在中英文下均可正常显示。
 - [ ] 用量趋势 tab 显示最近半年热力图，hover 有每日 token tooltip。
-- [ ] 最近 7 日摘要包含总量、日均、峰值、较前 7 日变化。
+- [ ] 模型用量趋势摘要包含近 7 日总量、日均和较前 7 日变化。
 - [ ] 项目看板支持最近 7 天和全部项目切换。
 - [ ] 项目排行展示 token、线程数、最近活跃时间。
 - [ ] 工具 TOP10 展示调用次数，估算 token 不可用时降级为 `--`。

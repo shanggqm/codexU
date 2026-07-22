@@ -105,7 +105,8 @@ enum PaletteValidator {
                 failure("PAL005", manifest.variants[appearance.rawValue] ?? "tokens/\(appearance.rawValue).json", "Variant is missing or invalid.", paletteID: paletteID)
                 continue
             }
-            if variant.data.series.count != 3 || variant.data.heatmap.count != 5 || variant.data.valueProgress.count != 3 || variant.data.milestones.count != 3 || !(0...0.12).contains(variant.surfaceTint.maximumOpacity) {
+            let modelSeriesIsValid = variant.data.modelSeries.map { $0.count == 9 } ?? true
+            if variant.data.series.count != 3 || !modelSeriesIsValid || variant.data.heatmap.count != 5 || variant.data.valueProgress.count != 3 || variant.data.milestones.count != 3 || !(0...0.12).contains(variant.surfaceTint.maximumOpacity) {
                 failure("PAL006", path, "Token array lengths or surface tint opacity are invalid.", paletteID: paletteID)
             }
             variants[appearance] = variant

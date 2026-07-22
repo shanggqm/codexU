@@ -39,7 +39,7 @@ enum PaletteCatalogSelfTest {
                 let tokens = catalog.resolve(id: descriptor.id, appearance: appearance)
                 expect(tokens.identity.paletteID == descriptor.id, "\(descriptor.id) should resolve without Swift registration")
                 expect(tokens.identity.appearance == appearance, "\(descriptor.id) should resolve both appearances")
-                expect(tokens.data.series.count == 3 && tokens.data.heatmap.count == 5, "\(descriptor.id) should expose complete data roles")
+                expect(tokens.data.series.count == 3 && tokens.data.modelSeries?.count == 9 && tokens.data.heatmap.count == 5, "\(descriptor.id) should expose complete data roles")
             }
         }
         expect(elapsed < 0.5, "palette catalog should load in under 500ms during self-test")
@@ -79,7 +79,7 @@ enum PaletteCatalogSelfTest {
                 expect(tokens.identity.paletteID == paletteID, "\(paletteID) should preserve its resolved identity")
                 expect(tokens.identity.appearance == appearance, "\(paletteID) should resolve both appearances")
                 expect(tokens.assets.isEmpty, "\(paletteID) should remain color-token-only in this phase")
-                expect(tokens.data.series.count == 3 && tokens.data.valueProgress.count == 3, "\(paletteID) should expose complete data roles")
+                expect(tokens.data.series.count == 3 && tokens.data.modelSeries?.count == 9 && tokens.data.valueProgress.count == 3, "\(paletteID) should expose complete data roles")
             }
         }
 
@@ -110,6 +110,15 @@ enum PaletteCatalogSelfTest {
             let sourcePackage = root.appendingPathComponent(PaletteCatalog.defaultPaletteID)
             let contributed = invalidRoot.appendingPathComponent("community.test")
             try FileManager.default.copyItem(at: sourcePackage, to: contributed)
+            for appearance in PaletteAppearance.allCases {
+                let tokenURL = contributed.appendingPathComponent("tokens/\(appearance.rawValue).json")
+                var tokenObject = try JSONSerialization.jsonObject(with: Data(contentsOf: tokenURL)) as? [String: Any] ?? [:]
+                var dataObject = tokenObject["data"] as? [String: Any] ?? [:]
+                dataObject.removeValue(forKey: "modelSeries")
+                tokenObject["data"] = dataObject
+                let tokenData = try JSONSerialization.data(withJSONObject: tokenObject, options: [.prettyPrinted, .sortedKeys])
+                try tokenData.write(to: tokenURL, options: .atomic)
+            }
             let contributedManifestURL = contributed.appendingPathComponent("manifest.json")
             let originalManifest = try JSONDecoder().decode(PaletteManifestDTO.self, from: Data(contentsOf: contributedManifestURL))
             let contributedManifest = PaletteManifestDTO(
@@ -133,6 +142,7 @@ enum PaletteCatalogSelfTest {
             let contributedCatalog = PaletteCatalog.load(rootURL: invalidRoot, appVersion: "1.0.5", includeExperimental: true)
             expect(contributedCatalog.contains("community.test"), "a valid third package should load without Swift registration")
             expect(contributedCatalog.descriptors(language: "en").contains(where: { $0.id == "community.test" }), "a valid contributed package should enter the settings catalog")
+            expect(contributedCatalog.resolve(id: "community.test", appearance: .light).data.modelSeries == nil, "legacy packages without model series should remain loadable")
 
             let mismatched = invalidRoot.appendingPathComponent("community.wrong-name")
             try FileManager.default.copyItem(at: sourcePackage, to: mismatched)
