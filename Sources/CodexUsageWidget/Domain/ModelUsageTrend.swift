@@ -78,6 +78,7 @@ struct ModelUsageAreaSeries: Identifiable, Equatable, Codable {
     let activeDayCount: Int
     let sourceQuality: UsageSourceQuality
     let costAvailable: Bool
+    let usesReferencePricing: Bool
 }
 
 enum ModelUsageAreaSeriesBuilder {
@@ -227,7 +228,9 @@ enum ModelUsageAreaSeriesBuilder {
             dayBuckets: buckets,
             activeDayCount: buckets.filter { $0.tokens > 0 }.count,
             sourceQuality: sourceQuality,
-            costAvailable: sourceQuality == .detailed
+            costAvailable: sourceQuality == .detailed,
+            usesReferencePricing: sourceQuality == .detailed
+                && trends.contains { modelUsageUsesReferencePricing($0.model) }
         )
     }
 }
@@ -373,6 +376,7 @@ enum ModelUsageTrendSelfTest {
         expect(capped.last?.dayBuckets.first?.tokens == 3, "other-models should sum the daily token buckets")
         expect(capped.allSatisfy { $0.dayBuckets.count == dateBuckets.count }, "all series should share one date axis")
         expect(capped.allSatisfy(\.costAvailable), "detailed series should expose estimated cost")
+        expect(capped.allSatisfy(\.usesReferencePricing), "unknown model prices should be marked as reference pricing")
         for dayIndex in dateBuckets.indices {
             let seriesTokens = capped.reduce(Int64(0)) { result, series in
                 result + series.dayBuckets[dayIndex].tokens
@@ -444,6 +448,16 @@ enum ModelUsageTrendSelfTest {
             sourceQuality: .approximate
         )
         expect(approximate.first?.costAvailable == false, "approximate series should disable cost mode")
+        expect(approximate.first?.usesReferencePricing == false, "disabled cost mode should not advertise reference pricing")
+
+        let catalogPriced = ModelUsageAreaSeriesBuilder.build(
+            modelTrends: [trend(model: "gpt-5.5", index: 0)],
+            dateBuckets: dateBuckets,
+            sourceQuality: .detailed
+        )
+        expect(catalogPriced.first?.usesReferencePricing == false, "catalog-priced models should not be marked as reference pricing")
+        expect(modelUsageUsesReferencePricing("gpt-5.6-luna"), "unknown models should use the documented reference price")
+        expect(!modelUsageUsesReferencePricing("gpt-5.5"), "catalog-priced models should retain their explicit price basis")
 
         let unsupportedTrend = UsageTrend(
             dayBuckets: overallBuckets,

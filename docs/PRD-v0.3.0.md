@@ -262,7 +262,7 @@ tooltip 字段：
 - 采用非堆叠叠加面积图：每个模型使用独立颜色的半透明面积和折线，共享同一纵轴。
 - 叠加一条中性颜色虚线表示全局每日总用量；卡片摘要同步显示近 7 日总量、日均和较前 7 日变化。
 - 默认按所选日期范围内的 token 总量显示 Top 8 模型；其余模型按日期合并为“其他模型”。模型不足 9 个时不生成聚合序列。
-- 纵轴在 `Token` 与 `估算费用（USD）` 之间切换；费用属于 API 等效估算，不代表官方账单。
+- 纵轴在 `Token` 与 `估算费用（USD）` 之间切换；费用属于 API 等效估算，不代表官方账单。模型没有独立价格时按 GPT-5.5 价格作参考折算，并在控件文案和 tooltip 中明确标注为参考费用。
 - 精细 token 事件可显示费用；粗略线程口径没有输入/缓存/输出拆分，费用控件禁用并解释原因。
 - 面板只在 Codex runtime 显示模型活动概览和模型序列；Claude Code 的 `modelTrends` 为 `nil`，表示当前不支持模型归因，并保留原有近 7 日摘要，而非显示为 0 个模型。
 
@@ -492,6 +492,7 @@ tooltip 字段：
 | activeDayCount | Int | 有 token 记录的日期数 |
 | sourceQuality | Enum | `detailed` / `approximate` |
 | costAvailable | Bool | 粗略线程口径时为 `false` |
+| usesReferencePricing | Bool | 模型无独立价格、按 GPT-5.5 参考价折算时为 `true` |
 
 #### ProjectUsage
 

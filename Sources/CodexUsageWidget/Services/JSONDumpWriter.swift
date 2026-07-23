@@ -226,6 +226,7 @@ private func runtimeJSONObject(_ local: LocalUsage) -> [String: Any] {
                     "activeDayCount": series.activeDayCount,
                     "sourceQuality": series.sourceQuality.rawValue,
                     "costAvailable": series.costAvailable,
+                    "usesReferencePricing": series.usesReferencePricing,
                     "dayBuckets": series.dayBuckets.map { bucket in
                         [
                             "day": bucket.id,
