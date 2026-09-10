@@ -44,6 +44,11 @@ Check the local data reader:
 make probe
 ```
 
+For macOS SSH usage changes, also run `make test-remote-usage` and, after building,
+`python3 scripts/test-remote-usage-integration.py`. The latter uses synthetic
+sessions and `--dump-json --skip-account`, which skips the account app-server
+and its database migrations. No real SSH server is required for these tests.
+
 ## Pull Requests
 
 - Keep changes focused on one bug fix or feature.

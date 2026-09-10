@@ -302,6 +302,7 @@ struct LocalUsage: Equatable {
     let projectBoard: ProjectBoard?
     let toolUsages: [ToolUsage]
     let skillUsages: [SkillUsage]
+    var remoteSourceNames: [String] = []
 }
 
 enum TaskColumnKind: String, Equatable {
@@ -1246,6 +1247,7 @@ final class UsageStore: ObservableObject {
 
 final class CodexUsageReader {
     private let fileManager = FileManager.default
+    private static let remoteUsageReader = RemoteUsageReader()
     private let localAnalyticsCacheVersion = 15
     private let sessionUsageCacheVersion = 10
     private let inferenceSampleSchemaVersion = 2
@@ -1262,7 +1264,9 @@ final class CodexUsageReader {
 
     func load(context: RuntimeLoadContext) -> UsageSnapshot {
         var messages: [String] = []
-        let appServer = readAppServer(messages: &messages)
+        // Usage-only probes must not launch Codex (which can migrate a fixture database).
+        let skipAccount = CommandLine.arguments.contains("--dump-json") && CommandLine.arguments.contains("--skip-account")
+        let appServer = skipAccount ? AppServerSnapshot() : readAppServer(messages: &messages)
         let local = readLocalUsage(context: context, messages: &messages)
         let taskBoard = readTaskBoard(context: context, messages: &messages)
 
@@ -1669,10 +1673,13 @@ final class CodexUsageReader {
     }
 
     private func readLocalUsage(context: RuntimeLoadContext, messages: inout [String]) -> LocalUsage? {
-        guard let dbPath = firstExistingPath([
-            NSHomeDirectory() + "/.codex/state_5.sqlite",
-            NSHomeDirectory() + "/.codex/sqlite/state_5.sqlite"
-        ]) else {
+        let localPath = firstExistingPath([
+            context.homeDirectory.appendingPathComponent(".codex/state_5.sqlite").path,
+            context.homeDirectory.appendingPathComponent(".codex/sqlite/state_5.sqlite").path
+        ])
+        let remoteDatabase = Self.remoteUsageReader.database(localPath: localPath, context: context, messages: &messages)
+        defer { if let remoteDatabase { try? fileManager.removeItem(at: remoteDatabase) } }
+        guard let dbPath = remoteDatabase?.path ?? localPath else {
             messages.append("未找到 Codex state_5.sqlite")
             return nil
         }
@@ -1821,7 +1828,8 @@ final class CodexUsageReader {
             inferencePerformance: analytics.inferencePerformance,
             projectBoard: projectBoard,
             toolUsages: analytics.toolUsages,
-            skillUsages: analytics.skillUsages
+            skillUsages: analytics.skillUsages,
+            remoteSourceNames: Self.remoteUsageReader.includedSourceNames
         )
     }
 
@@ -1899,7 +1907,8 @@ final class CodexUsageReader {
         }
 
         func shouldCollectInference(for source: SessionUsageSource) -> Bool {
-            source.updatedAt.map { $0 >= inferenceHistoryStart } ?? true
+            // SSH exports deliberately omit inference, prompt and tool data.
+            !source.cwd.hasPrefix("ssh:") && (source.updatedAt.map { $0 >= inferenceHistoryStart } ?? true)
         }
         let sourceQuery = """
         SELECT id, rollout_path AS rolloutPath, model, cwd, updated_at AS updatedAt
@@ -10787,8 +10796,8 @@ private func usageSourceTooltip(_ quality: UsageSourceQuality, language: WidgetL
 
 private func usageSourceHelp(language: WidgetLanguage) -> String {
     language.text(
-        "使用本机 Codex session token_count 事件估算；缺失时回退到本机线程更新时间统计。API 等效价值为估算，不代表官方账单。",
-        "Estimated from local Codex session token_count events. Falls back to thread updated_at when detailed events are unavailable. API-equivalent value is an estimate, not an official bill."
+        "使用已采集的 Codex token_count 事件估算，包含已配置的 SSH 用量；缺失时回退到线程更新时间统计。API 等效价值为估算，不代表官方账单。",
+        "Estimated from collected Codex token_count events, including configured SSH usage. Falls back to thread updated_at when detailed events are unavailable. API-equivalent value is an estimate, not an official bill."
     )
 }
 

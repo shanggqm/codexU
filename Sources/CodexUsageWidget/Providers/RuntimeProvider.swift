@@ -77,7 +77,9 @@ struct CodexRuntimeProvider: RuntimeUsageProvider {
             snapshot: snapshot,
             status: status,
             quotaSourceLabel: "Codex app-server + local records",
-            usageSourceLabel: "Codex local state"
+            usageSourceLabel: (snapshot.local?.remoteSourceNames.isEmpty ?? true)
+                ? "Codex local state"
+                : "Codex local + SSH (\(snapshot.local?.remoteSourceNames.joined(separator: ", ") ?? ""))"
         )
     }
 

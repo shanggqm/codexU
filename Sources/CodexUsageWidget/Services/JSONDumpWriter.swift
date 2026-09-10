@@ -179,6 +179,7 @@ private func runtimeJSONObject(_ local: LocalUsage) -> [String: Any] {
         "sevenDayTokens": local.sevenDayTokens,
         "lifetimeTokens": local.lifetimeTokens,
         "threadCount": local.threadCount,
+        "remoteSourceNames": local.remoteSourceNames,
         "lastUpdatedAt": runtimeJSONValue(runtimeISOString(local.lastUpdatedAt)),
         "dailyBuckets": local.dailyBuckets.map { bucket in
             [

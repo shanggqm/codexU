@@ -10,6 +10,10 @@ This app is distributed outside the Mac App Store as a downloadable DMG. The rep
 - Windows 10/11 x86_64 with the MSVC toolchain. Windows ARM64 is not packaged yet.
 - `make release` builds the current host architecture by default. Use the explicit architecture targets below when preparing GitHub Release artifacts.
 - A local Codex installation and a signed-in Codex account are required for account quota data.
+- Optional macOS SSH usage collection requires Python 3 on each configured POSIX
+  remote host. The build bundles `Resources/remote-usage-collector.py` in the signed
+  app resources; it is sent over SSH stdin and is not installed on the remote host.
+  No Python runtime is required on the Mac for this feature. See [setup](docs/REMOTE_USAGE.md).
 
 ## Local unsigned DMG
 
