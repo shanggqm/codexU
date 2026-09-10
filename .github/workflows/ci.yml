@@ -13,6 +13,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build
         run: make build
+      - name: SSH usage collector and cache tests
+        timeout-minutes: 3
+        run: make test-remote-usage
+      - name: SSH usage aggregation probe
+        timeout-minutes: 2
+        run: python3 scripts/test-remote-usage-integration.py
       - name: Palette package and rendering tests
         run: ./scripts/test-palettes.sh
       - name: Menu bar rendering tests

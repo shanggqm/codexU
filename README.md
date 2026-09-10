@@ -215,6 +215,8 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 
 ## 数据来源
 
+macOS 可选配置 **SSH 远程用量采集**：将自己的开发服务器上的 Codex token、趋势和 API 等效价值合并到统计中。默认关闭，使用现有 SSH 密钥和主机配置；不传输提示词、回复、凭据或完整数据库。详见 [远程采集配置与统计边界](docs/REMOTE_USAGE.md)。未配置时继续仅统计本机记录。
+
 - 账户与额度：`codex app-server` 的 `account/read`、`account/rateLimits/read`、`account/usage/read`。
 - 本机 token 总量：`~/.codex/state_5.sqlite`。
 - 精细 token 拆分：`~/.codex/sessions/**/rollout-*.jsonl` 和 `~/.codex/archived_sessions/*.jsonl` 中的 `token_count` 事件。
@@ -239,7 +241,7 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 
 ### codexU 会上传我的 Codex 线程或 usage 数据吗？
 
-不会。codexU 只在本机读取 Codex 账户额度、本机 SQLite usage 和 automation 元数据，不把这些数据上传到第三方服务。自动更新检测只请求 GitHub Release 的公开版本元数据，不携带本机 usage、线程、路径、日志或账户数据。
+不会上传到第三方服务。默认只读取本机数据；显式配置 SSH 采集后，会把指定服务器的用量元数据下载到 Mac 本地缓存，不传输提示词、回复或凭据。自动更新检测只请求 GitHub Release 的公开版本元数据，不携带本机 usage、线程、路径、日志或账户数据。
 
 ### 为什么显示的是剩余百分比，而不是绝对额度？
 

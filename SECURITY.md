@@ -32,6 +32,15 @@ It should not upload local usage, transcript, task, thread, account, or path dat
 
 ## Network Scope
 
+On macOS, users may explicitly opt into SSH usage collection by creating
+`~/.config/codexU/remote-hosts.json`. Only the listed SSH destinations are queried;
+this does not discover or automatically enable hosts. The bundled Python collector
+reads the remote Codex database and logs read-only and returns allowlisted usage
+metadata. No local usage or credentials are uploaded. SSH requires pre-trusted
+host keys and noninteractive authentication. Snapshots remain in the user's local
+codexU cache, and the live Codex database is never modified. See
+[SSH usage scope, limits and cache removal](docs/REMOTE_USAGE.md).
+
 codexU is local-first. The update checker may request public GitHub Release metadata from `https://api.github.com/repos/shanggqm/codexU/releases` during automatic checks when enabled or when the user manually checks for updates.
 
 Update requests must not include local usage, transcript, task, thread, account, path, prompt, response, tool argument, or tool output data. The update checker may send standard HTTPS headers such as `User-Agent` and `If-None-Match` for ETag caching.

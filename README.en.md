@@ -191,6 +191,13 @@ For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md
 
 ## Data Sources
 
+macOS optionally supports **SSH usage sources** for your own development servers.
+Token totals, trends and API-equivalent value can include remote Codex records.
+This is disabled by default and uses existing SSH keys/configuration; prompts,
+responses, credentials and complete databases are not transferred. See
+[setup and statistics boundaries](docs/REMOTE_USAGE.md). Without configuration,
+usage statistics remain local-only.
+
 - Account and quota: `codex app-server` JSON-RPC methods `account/read`, `account/rateLimits/read`, and `account/usage/read`.
 - Local token totals: `~/.codex/state_5.sqlite`.
 - Detailed token splits: `token_count` events in `~/.codex/sessions/**/rollout-*.jsonl` and `~/.codex/archived_sessions/*.jsonl`.
@@ -215,7 +222,11 @@ No. codexU is an unofficial local macOS utility for reading local Codex app-serv
 
 ### Does codexU upload my Codex threads or usage data?
 
-No. codexU reads Codex quota, local SQLite usage, and automation metadata locally. It does not upload that data to a third-party service. Update checks only request public GitHub Release metadata and do not include local usage, threads, paths, logs, or account data.
+It does not upload data to a third-party service. By default it only reads local
+data. Explicit SSH configuration downloads usage metadata from the selected hosts
+into a local Mac cache, without transferring prompts, responses or credentials.
+Update checks only request public GitHub Release metadata and do not include
+local usage, threads, paths, logs, or account data.
 
 ### Why does codexU show remaining percentage instead of absolute quota?
 
