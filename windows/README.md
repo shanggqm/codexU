@@ -42,13 +42,15 @@ Windows 工作区使用 Node.js 22.12 或更新版本和 MSVC ABI。首次在当
 安装并设置项目级 toolchain override：
 
 ```powershell
-rustup toolchain install 1.97.1-x86_64-pc-windows-msvc --profile minimal --component rustfmt
-rustup override set 1.97.1-x86_64-pc-windows-msvc
+rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt
+rustup override set stable-x86_64-pc-windows-msvc
 ```
 
 该 override 只作用于当前 `windows/` 目录，不修改全局默认 toolchain。仓库不提交
 `rust-toolchain.toml`，因为只写版本号时，rustup 会沿用用户的 default host，在配置为
 GNU 的 Windows 环境中意外选择 GNU ABI，并额外要求系统提供 `dlltool.exe`。
+
+Windows release 构建会先更新 stable MSVC toolchain，再执行格式检查、测试和打包。
 
 ```powershell
 cd windows
