@@ -14,6 +14,7 @@ tauri-build = { version = "2", features = [] }
 codexu-core = { path = "../../../crates/codexu-core" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
