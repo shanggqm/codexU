@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauri::Manager;
-use tracing::info;
+use tracing::{info, warn};
 
 mod app_state;
 mod commands;
@@ -124,6 +124,11 @@ fn main() {
         .init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Err(error) = tray::show_main_window(app) {
+                warn!(error = %error, "Could not restore main window for secondary launch");
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let background_capture = is_background_capture();
