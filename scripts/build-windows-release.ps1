@@ -64,11 +64,8 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
     throw "npm is required to build the Windows release."
 }
 
-$Toolchain = "1.97.1-x86_64-pc-windows-msvc"
-$InstalledToolchains = (& rustup toolchain list | Out-String)
-if ($InstalledToolchains -notmatch [regex]::Escape($Toolchain)) {
-    Invoke-Checked "rustup" @("toolchain", "install", $Toolchain, "--profile", "minimal", "--component", "rustfmt")
-}
+$Toolchain = "stable-x86_64-pc-windows-msvc"
+Invoke-Checked "rustup" @("update", "--no-self-update", $Toolchain)
 
 Push-Location $WindowsRoot
 try {
