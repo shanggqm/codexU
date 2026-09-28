@@ -1244,6 +1244,118 @@ final class UsageStore: ObservableObject {
     }
 }
 
+enum CodexExecutableResolver {
+    static func candidatePaths(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        installedAppURL: URL? = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex")
+    ) -> [String] {
+        var paths = [
+            homeDirectory.appendingPathComponent(".local/bin/codex").path,
+            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
+            "/Applications/Codex.app/Contents/Resources/codex",
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex"
+        ]
+
+        // Preserve support for Codex/ChatGPT apps installed outside /Applications.
+        if let installedAppURL {
+            paths.append(installedAppURL.appendingPathComponent("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex").path)
+            paths.append(installedAppURL.appendingPathComponent("Contents/Resources/codex").path)
+        }
+        paths.append("/usr/bin/codex")
+
+        var seen = Set<String>()
+        return paths.filter { seen.insert($0).inserted }
+    }
+
+    static func resolve(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        installedAppURL: URL? = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex"),
+        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> String? {
+        candidatePaths(homeDirectory: homeDirectory, installedAppURL: installedAppURL).first(where: isExecutable)
+    }
+}
+
+enum CodexExecutableResolverSelfTest {
+    static func run() -> Bool {
+        let home = URL(fileURLWithPath: "/Users/codexu-test")
+        let candidates = CodexExecutableResolver.candidatePaths(
+            homeDirectory: home,
+            installedAppURL: URL(fileURLWithPath: "/Applications/ChatGPT.app")
+        )
+        let expectedPriority = [
+            "/Users/codexu-test/.local/bin/codex",
+            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
+            "/Applications/Codex.app/Contents/Resources/codex",
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex"
+        ]
+        guard Array(candidates.prefix(expectedPriority.count)) == expectedPriority else {
+            print("Codex executable self-test failed: candidate priority or legacy paths changed")
+            return false
+        }
+
+        let legacyPaths = [
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
+            "/Applications/Codex.app/Contents/Resources/codex",
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex",
+            "/usr/bin/codex"
+        ]
+        for legacyPath in legacyPaths {
+            guard CodexExecutableResolver.resolve(
+                homeDirectory: home,
+                installedAppURL: nil,
+                isExecutable: { $0 == legacyPath }
+            ) == legacyPath else {
+                print("Codex executable self-test failed: legacy fallback was not resolved: \(legacyPath)")
+                return false
+            }
+        }
+
+        let customApp = URL(fileURLWithPath: "/Applications/Custom Codex.app")
+        let customBundlePath = customApp.appendingPathComponent("Contents/Resources/codex").path
+        guard CodexExecutableResolver.resolve(
+            homeDirectory: home,
+            installedAppURL: customApp,
+            isExecutable: { $0 == customBundlePath }
+        ) == customBundlePath else {
+            print("Codex executable self-test failed: discovered app bundle fallback was not resolved")
+            return false
+        }
+
+        guard let actualPath = CodexExecutableResolver.resolve() else {
+            print("Codex executable self-test failed: no executable Codex candidate found")
+            return false
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: actualPath)
+        process.arguments = ["--version"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            print("Codex executable self-test failed: could not run --version at \(actualPath)")
+            return false
+        }
+        let version = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard process.terminationStatus == 0, version.hasPrefix("codex-cli ") else {
+            print("Codex executable self-test failed: --version returned status \(process.terminationStatus)")
+            return false
+        }
+
+        print("Codex executable self-test passed: \(actualPath) (\(version))")
+        return true
+    }
+}
+
 final class CodexUsageReader {
     private let fileManager = FileManager.default
     private let localAnalyticsCacheVersion = 15
@@ -3316,26 +3428,7 @@ final class CodexUsageReader {
     }
 
     private func resolveCodexExecutablePath() -> String? {
-        var candidates: [String] = []
-
-        // The app's display name and install path may change, while its bundle identifier remains stable.
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") {
-            candidates.append(
-                appURL
-                    .appendingPathComponent("Contents/Resources/codex")
-                    .path
-            )
-        }
-
-        candidates.append(contentsOf: [
-            "/Applications/ChatGPT.app/Contents/Resources/codex",
-            "/Applications/Codex.app/Contents/Resources/codex",
-            "/opt/homebrew/bin/codex",
-            "/usr/local/bin/codex",
-            "/usr/bin/codex"
-        ])
-
-        return firstExistingPath(candidates)
+        CodexExecutableResolver.resolve(isExecutable: { fileManager.isExecutableFile(atPath: $0) })
     }
 
     private func firstExistingPath(_ paths: [String]) -> String? {
@@ -12262,6 +12355,10 @@ struct codexUMain {
 
         if CommandLine.arguments.contains("--self-test-app-server-pipe") {
             exit(POSIXPipeReaderSelfTest.run() ? 0 : 1)
+        }
+
+        if CommandLine.arguments.contains("--self-test-codex-executable") {
+            exit(CodexExecutableResolverSelfTest.run() ? 0 : 1)
         }
 
         if CommandLine.arguments.contains("--self-test-task-runtime") {
