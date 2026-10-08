@@ -124,7 +124,13 @@ After updating the version and release notes, run the existing macOS package gat
 make release-package VERSION=<version>
 ```
 
-Then push the annotated `v<version>` tag. `.github/workflows/release-packages.yml` builds and verifies the macOS arm64/x86_64 DMGs and the Windows x86_64 MSI/NSIS installers in parallel. A final Ubuntu job downloads both platform outputs and runs:
+Before creating the final release commit and annotated tag, the workflow can build Windows installers from the reviewed source branch without committing checksum placeholders:
+
+```sh
+gh workflow run release-packages.yml --ref <source-branch> -f version=<version> -f platform=windows
+```
+
+Download the Windows artifact, combine it with the locally verified macOS DMGs, fill all four hashes into the release notes, and run both `make release-cross-platform-check` and `make release-check`. Then commit the final release metadata, push `main` and the annotated tag. Tag builds run both platforms and the final Ubuntu checksum aggregation; a manual dispatch defaults to `platform=all`.
 
 ```sh
 make release-cross-platform-check VERSION=<version>

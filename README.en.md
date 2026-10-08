@@ -191,6 +191,7 @@ For Developer ID signing and notarization, see [DISTRIBUTION.md](DISTRIBUTION.md
 
 ## Data Sources
 
+- Executable discovery: resolve ChatGPT/Codex by bundle identity, supporting the nested `codex-cli/CodexCLI.app`, `codex-cli/bin/codex`, legacy app layouts, and standard CLI locations.
 - Account and quota: `codex app-server` JSON-RPC methods `account/read`, `account/rateLimits/read`, and `account/usage/read`.
 - Local token totals: `~/.codex/state_5.sqlite`.
 - Detailed token splits: `token_count` events in `~/.codex/sessions/**/rollout-*.jsonl` and `~/.codex/archived_sessions/*.jsonl`.
@@ -240,3 +241,7 @@ Scan the QR code to follow my WeChat official account for AI tools, Codex usage 
 Scan to join the Chinese-language codexU user community for usage tips, issue feedback, and open-source collaboration.
 
 <img src="docs/codexu-community-qr.jpg" alt="codexU user community WeChat QR code" width="320" />
+
+### Startup data freshness
+
+Home restores a bounded local summary for the same day, time zone and source, while quota and tasks refresh independently. “Previous result” identifies cached values; full historical details remain in the background. History now uses a local SQLite incremental index: the initial backfill runs in the background, subsequent runs resume from checkpoints, and revisable daily archives are persisted. Incomplete inventories, unreadable files, and unsupported record limits retain prior results with an explicit preparation state instead of fabricated zeros. Expired, unpublished report output is reclaimed in bounded batches while published and pinned cuts remain intact. Cache pressure, index contention, and read failures are shown explicitly. Native five-second startup acceptance still requires an unlocked desktop and measured rendering/interaction; model timings are not a substitute.

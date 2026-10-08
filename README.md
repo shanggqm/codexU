@@ -215,6 +215,7 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 
 ## 数据来源
 
+- 可执行程序：按应用标识定位 ChatGPT/Codex，兼容新版内嵌 `codex-cli/CodexCLI.app`、`codex-cli/bin/codex`、旧版内嵌程序和常规 CLI 安装路径。
 - 账户与额度：`codex app-server` 的 `account/read`、`account/rateLimits/read`、`account/usage/read`。
 - 本机 token 总量：`~/.codex/state_5.sqlite`。
 - 精细 token 拆分：`~/.codex/sessions/**/rollout-*.jsonl` 和 `~/.codex/archived_sessions/*.jsonl` 中的 `token_count` 事件。
@@ -244,6 +245,10 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 ### 为什么显示的是剩余百分比，而不是绝对额度？
 
 当前 Codex 本地 API 暴露的是滚动窗口已用百分比和重置时间，不暴露绝对额度数量，所以 codexU 展示的是 5 小时和 7 天窗口的剩余百分比。
+
+### 为什么打开后部分统计仍在补全？
+
+首页会先恢复同一统计日、时区和数据来源的本地摘要，额度、任务分别刷新；“上次结果”表示缓存值。完整历史仍在后台整理，缓存摘要不包含完整图表明细。历史读取现使用本地 SQLite 增量索引：首次后台整理，后续从检查点处理追加内容，按统计日保存可修订的归档。完整清单尚未覆盖、文件暂时不可读或记录超出可处理边界时，会保留上次结果并标记补全中，不把缺失伪造成 0。过期且未发布的中间报告会分批回收，保留当前发布结果和使用中的版本；缓存满、索引占用或读取失败会显示具体状态。窗口 5 秒目标仍需在可操作的真实桌面环境逐项验收，不能用后台或模型计时代替。
 
 ### 支持 Intel Mac 吗？
 

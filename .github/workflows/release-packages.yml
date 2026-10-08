@@ -7,9 +7,18 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to package (must match Resources/Info.plist)"
+        description: "Version to package (macOS builds must match Resources/Info.plist)"
         required: true
         type: string
+      platform:
+        description: "Platforms to build (Windows can be prepared before release metadata)"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - macos
+          - windows
 
 permissions:
   contents: read
@@ -40,6 +49,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   macos:
+    if: github.event_name != 'workflow_dispatch' || inputs.platform != 'windows'
     needs: resolve-version
     runs-on: macos-14
     steps:
@@ -58,6 +68,7 @@ jobs:
           if-no-files-found: error
 
   windows:
+    if: github.event_name != 'workflow_dispatch' || inputs.platform != 'macos'
     needs: resolve-version
     runs-on: windows-latest
     steps:
@@ -76,6 +87,7 @@ jobs:
           if-no-files-found: error
 
   verify:
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all'
     needs: [resolve-version, macos, windows]
     runs-on: ubuntu-latest
     steps:

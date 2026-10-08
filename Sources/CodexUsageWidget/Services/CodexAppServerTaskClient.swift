@@ -447,18 +447,7 @@ final class CodexAppServerTaskClient: CodexTaskEventClient {
     }
 
     private func resolveCodexExecutableURL() -> URL? {
-        var candidates: [URL] = []
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") {
-            candidates.append(appURL.appendingPathComponent("Contents/Resources/codex"))
-        }
-        candidates.append(contentsOf: [
-            URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"),
-            URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
-            URL(fileURLWithPath: "/opt/homebrew/bin/codex"),
-            URL(fileURLWithPath: "/usr/local/bin/codex"),
-            URL(fileURLWithPath: "/usr/bin/codex")
-        ])
-        return candidates.first { fileManager.isExecutableFile(atPath: $0.path) }
+        CodexExecutableLocator.resolve()
     }
 
     private static func integerID(_ value: Any?) -> Int64? {

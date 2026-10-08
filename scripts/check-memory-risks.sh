@@ -114,6 +114,21 @@ require_literal Sources/CodexUsageWidget/Providers/ClaudeCode/ClaudeSkillPathRes
 require_literal Sources/CodexUsageWidget/Providers/ClaudeCode/ClaudeSkillPathResolver.swift \
   'shouldStopAscending(currentPath: "/", parentPath: "/..")' 'Claude Skill 路径上溯缺少 macOS 13 根目录回归测试'
 
+require_literal Sources/CodexUsageWidget/Services/UsageParseHelper.swift \
+  'static let maximumResponse = 4 * 1024 * 1024' '历史解析 helper 缺少响应总量上限'
+require_literal Sources/CodexUsageWidget/Services/UsageParseHelper.swift \
+  'pending.count <= maximumFrame' '历史解析 helper 缺少未完成帧上限'
+require_literal Sources/CodexUsageWidget/Services/UsageParseHelper.swift \
+  'deinit { terminate() }' '历史解析 helper 缺少退出清理'
+require_literal Sources/CodexUsageWidget/Services/HomeTaskReader.swift \
+  'static let timeout: TimeInterval = 3' '首页任务 helper 缺少独立超时'
+require_literal Sources/CodexUsageWidget/Services/HomeSnapshotStore.swift \
+  'static let maximumBytes = 256 * 1_024' '首页摘要缓存缺少字节上限'
+require_literal Sources/CodexUsageWidget/Services/UsageIndexMaintenance.swift \
+  'LIMIT 256' '历史报告回收缺少单批行数边界'
+require_literal scripts/build-release-artifacts.sh \
+  'CODEXU_SKIP_BUILD=1 ./scripts/test-history-index.sh' '发布包装没有运行历史索引及首页回归'
+
 if ! git diff --check >/dev/null; then
   fail 'git diff --check 未通过'
 fi

@@ -77,6 +77,19 @@ final class LeadershipDataReader {
         )
     }
 
+    /// One-time recovery from the previous reader's source cache; never reads session logs.
+    func restoreCached(data: Data, observedAt: Date, calendar: Calendar) -> LeadershipDashboardSnapshot? {
+        guard data.count <= 2 * 1_024 * 1_024,
+              let cache = try? JSONDecoder().decode(LeadershipSourceCache.self, from: data),
+              cache.version == cacheVersion, !cache.entries.isEmpty, cache.entries.count < maximumCacheEntries else { return nil }
+        let sources = cache.entries.sorted { $0.key < $1.key }.map { $0.value.source }
+        let workers = deduplicatedWorkers(sources.compactMap(\.worker))
+        let intervals = Dictionary(sources.flatMap(\.intervals).map { ($0.id, $0) },
+                                   uniquingKeysWith: { existing, _ in existing })
+        return LeadershipAggregator().makeDashboard(workers: workers, intervals: Array(intervals.values),
+                                                    now: observedAt, calendar: calendar)
+    }
+
     private func deduplicatedWorkers(_ workers: [LeadershipWorker]) -> [LeadershipWorker] {
         var byID: [String: LeadershipWorker] = [:]
         for worker in workers {

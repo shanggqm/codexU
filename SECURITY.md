@@ -37,3 +37,7 @@ codexU is local-first. The update checker may request public GitHub Release meta
 Update requests must not include local usage, transcript, task, thread, account, path, prompt, response, tool argument, or tool output data. The update checker may send standard HTTPS headers such as `User-Agent` and `If-None-Match` for ETag caching.
 
 codexU must not silently download, install, replace, or relaunch the app as part of the GitHub Release check. It may open the user's default browser to a matching DMG asset or the Release page.
+
+## Derived startup data
+
+The home display cache retains at most two 256 KiB snapshots with usage summaries and bounded task titles/identifiers. It excludes account quota, raw transcripts, prompts, responses and tool arguments; restored tasks do not assert live running state. Files use mode 0600 inside a 0700 directory, with atomic replacement and fsync. The production history pipeline uses a separate SQLite index containing typed statistical facts and parser state under a single-writer lock. It opens original Codex databases read-only. Parser helpers have bounded frames and deadlines. Large Codex message/tool-output bodies are validated as a stream while only allowlisted statistical scalars survive in checkpoints; raw output and message text are discarded. Unknown or unsupported oversized statistical records are marked incomplete rather than silently counted. No usage, path, transcript, or account information is uploaded.

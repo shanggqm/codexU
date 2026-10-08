@@ -1,0 +1,11 @@
+{"timestamp":"2026-09-17T12:00:00Z","type":"session_meta","payload":{"forked_from_id":"synthetic-parent"}}
+{"timestamp":"2026-09-17T12:00:02Z","type":"turn_context","payload":{"model":"gpt-5","effort":"high"}}
+{"timestamp":"2026-09-17T12:00:04Z","type":"response_item","payload":{"role":"assistant","type":"message","content":[]}}
+{"timestamp":"2026-09-17T12:00:06Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15},"last_token_usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}}
+{"timestamp":"2026-09-17T12:00:08Z","type":"response_item","payload":{"type":"function_call_output","output":"synthetic"}}
+{"timestamp":"2026-09-17T12:00:10Z","type":"response_item","payload":{"type":"reasoning","summary":[]}}
+{"timestamp":"2026-09-17T12:00:12Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"output_tokens":10,"total_tokens":30},"last_token_usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}}
+{"timestamp":"2026-09-17T12:00:14Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"service_tier":"fast"}}}
+{"timestamp":"2026-09-17T12:00:16Z","type":"turn_context","payload":{"model":"gpt-5","effort":"medium"}}
+{"timestamp":"2026-09-17T12:00:18Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"cat /fixture/SKILL.md\"}"}}
+{"timestamp":"2026-09-17T12:00:20Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":30,"output_tokens":15,"total_tokens":45},"last_token_usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}}
