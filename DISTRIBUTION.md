@@ -71,7 +71,7 @@ This creates the DMG and a `SHA-256` checksum file next to it.
 The Windows package uses Tauri's MSI and NSIS targets. Run this on a Windows machine or Windows CI runner with Rust, rustup, Node.js, and npm installed:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows-release.ps1 -Version 1.3.1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-windows-release.ps1 -Version 1.3.2
 ```
 
 The script pins the MSVC Rust toolchain, runs the Windows workspace tests and frontend build, builds both installers, and writes these files under `dist/windows/`:
@@ -88,7 +88,7 @@ The current Tauri configuration uses the WebView2 download bootstrapper. The Win
 The repository target is also available as:
 
 ```sh
-make release-windows VERSION=1.3.1
+make release-windows VERSION=1.3.2
 ```
 
 ## Deterministic release verification
