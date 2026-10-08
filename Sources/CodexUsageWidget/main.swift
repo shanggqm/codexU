@@ -3663,13 +3663,26 @@ func estimateStaticTokens(_ text: String) -> Int64 {
 private func modelTokenPrice(for model: String?) -> ModelTokenPrice {
     let normalized = (model ?? "").lowercased()
 
+    if normalized.contains("gpt-6-astra") {
+        return ModelTokenPrice(
+            model: "gpt-6-astra",
+            inputPerMillion: 10,
+            cachedInputPerMillion: 1,
+            outputPerMillion: 50,
+            cacheWriteInputPerMillion: 12.5,
+            fastModeMultiplier: 2.5,
+            longContextInputMultiplier: 2,
+            longContextOutputMultiplier: 1.5,
+            usesReferencePricing: false
+        )
+    }
     if normalized.contains("gpt-5.6-sol") || normalized == "gpt-5.6" {
         return ModelTokenPrice(
             model: "gpt-5.6-sol",
-            inputPerMillion: 5,
-            cachedInputPerMillion: 0.5,
-            outputPerMillion: 30,
-            cacheWriteInputPerMillion: 6.25,
+            inputPerMillion: 4,
+            cachedInputPerMillion: 0.4,
+            outputPerMillion: 20,
+            cacheWriteInputPerMillion: 5,
             fastModeMultiplier: 2,
             longContextInputMultiplier: 2,
             longContextOutputMultiplier: 1.5,
@@ -3877,6 +3890,7 @@ private enum ModelPricingSelfTest {
             totalTokens: 110_000
         )
         let sol = modelTokenPrice(for: "gpt-5.6")
+        let astra = modelTokenPrice(for: "gpt-6-astra-2026-04-30")
         let terra = modelTokenPrice(for: "gpt-5.6-terra-2026-02-16")
         let luna = modelTokenPrice(for: "GPT-5.6-LUNA")
         let gpt55 = modelTokenPrice(for: "gpt-5.5")
@@ -3887,9 +3901,12 @@ private enum ModelPricingSelfTest {
 
         expect(sol.model == "gpt-5.6-sol", "gpt-5.6 should resolve to gpt-5.6-sol")
         expect(!sol.usesReferencePricing, "gpt-5.6 should use an explicit price")
+        expect(astra.model == "gpt-6-astra", "Astra snapshots should preserve the Astra price")
+        expect(!astra.usesReferencePricing, "gpt-6-astra should use an explicit price")
         expect(terra.model == "gpt-5.6-terra", "terra snapshots should preserve the terra price")
         expect(luna.model == "gpt-5.6-luna", "luna matching should be case-insensitive")
-        expect(nearlyEqual(estimatedCostUSD(tokens: sampleTokens, price: sol), 0.62), "Sol cached input estimate should use the split rates")
+        expect(nearlyEqual(estimatedCostUSD(tokens: sampleTokens, price: astra), 1.14), "Astra should use the official standard API rates")
+        expect(nearlyEqual(estimatedCostUSD(tokens: sampleTokens, price: sol), 0.456), "Sol should use the official standard API rates")
         expect(nearlyEqual(estimatedCostUSD(tokens: sampleTokens, price: terra), 0.248), "Terra should use the official standard API rates")
         expect(nearlyEqual(estimatedCostUSD(tokens: sampleTokens, price: luna), 0.0248), "Luna should use the official standard API rates")
         expect(nearlyEqual(gpt55.inputPerMillion, 5) && nearlyEqual(gpt55.cachedInputPerMillion, 0.5) && nearlyEqual(gpt55.outputPerMillion, 30), "GPT-5.5 should use the official standard API rates")
@@ -3906,8 +3923,10 @@ private enum ModelPricingSelfTest {
             reasoningOutputTokens: 0,
             totalTokens: 110_000
         )
-        expect(nearlyEqual(estimatedCostUSD(tokens: cacheWriteTokens, price: sol), 0.6325), "GPT-5.6 cache writes should use the 1.25x write rate")
-        expect(nearlyEqual(estimatedCostUSD(tokens: cacheWriteTokens, price: sol, serviceTier: "priority"), 1.265), "GPT-5.6 Fast mode should use the published 2x API rates")
+        expect(nearlyEqual(estimatedCostUSD(tokens: cacheWriteTokens, price: astra), 1.165), "Astra cache writes should use the published write rate")
+        expect(nearlyEqual(estimatedCostUSD(tokens: cacheWriteTokens, price: sol), 0.466), "GPT-5.6 cache writes should use the published write rate")
+        expect(nearlyEqual(estimatedCostUSD(tokens: cacheWriteTokens, price: astra, serviceTier: "priority"), 2.9125), "Astra Fast mode should use the published 2.5x API rates")
+        expect(nearlyEqual(estimatedCostUSD(tokens: cacheWriteTokens, price: sol, serviceTier: "priority"), 0.932), "GPT-5.6 Fast mode should use the published 2x API rates")
         expect(nearlyEqual(estimatedCostUSD(tokens: cacheWriteTokens, price: gpt55, serviceTier: "fast"), 1.55), "GPT-5.5 Fast mode should use the published 2.5x API rates")
 
         let longContextTokens = TokenBreakdown(
@@ -3918,8 +3937,10 @@ private enum ModelPricingSelfTest {
             reasoningOutputTokens: 0,
             totalTokens: 400_000
         )
-        expect(nearlyEqual(estimatedCostUSD(tokens: longContextTokens, price: sol), 6.85), "GPT-5.6 long context should use 2x input and 1.5x output rates")
+        expect(nearlyEqual(estimatedCostUSD(tokens: longContextTokens, price: astra), 12.2), "Astra long context should use 2x input and 1.5x output rates")
+        expect(nearlyEqual(estimatedCostUSD(tokens: longContextTokens, price: sol), 4.88), "GPT-5.6 long context should use 2x input and 1.5x output rates")
         expect(isFastServiceTier("priority") && isFastServiceTier("FAST") && !isFastServiceTier("default"), "service tier normalization should distinguish Fast mode")
+        expect(!modelUsageUsesReferencePricing("gpt-6-astra"), "known Astra models should not use reference pricing")
         expect(!modelUsageUsesReferencePricing("gpt-5.6-luna"), "known GPT-5.6 models should not use reference pricing")
         expect(modelUsageUsesReferencePricing("gpt-5.3-codex-spark"), "Codex Spark should not inherit GPT-5.3 Codex pricing")
         expect(modelUsageUsesReferencePricing("future-model"), "unknown models should retain reference pricing")
