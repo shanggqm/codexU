@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Datelike, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::history_integrity::HistoryReadError;
@@ -194,6 +194,14 @@ pub async fn index_codex_rollout_files(
 
 /// Aggregates a collection of session summaries into `LocalUsage`.
 pub fn make_local_usage(summaries: Vec<SessionSummary>, now: DateTime<Utc>) -> Option<LocalUsage> {
+    make_local_usage_with_timezone(summaries, now, crate::StatisticsTimeZone::Local)
+}
+
+pub fn make_local_usage_with_timezone(
+    summaries: Vec<SessionSummary>,
+    now: DateTime<Utc>,
+    statistics: crate::StatisticsTimeZone,
+) -> Option<LocalUsage> {
     let mut unique_deltas: Vec<UsageDelta> = Vec::new();
     let mut seen_message_ids = HashSet::new();
     for delta in summaries.iter().flat_map(|s| s.deltas.iter()) {
@@ -212,14 +220,10 @@ pub fn make_local_usage(summaries: Vec<SessionSummary>, now: DateTime<Utc>) -> O
 
     unique_deltas.sort_by_key(|a| a.date);
 
-    let day_start = Utc
-        .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
-        .unwrap();
-    let seven_day_start = day_start - chrono::Duration::days(6);
-    let previous_seven_day_start = day_start - chrono::Duration::days(13);
-    let month_start = Utc
-        .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
-        .unwrap();
+    let day_start = statistics.day_start(now);
+    let seven_day_start = statistics.days_before_start(now, 6);
+    let previous_seven_day_start = statistics.days_before_start(now, 13);
+    let month_start = statistics.month_start(now);
 
     let mut today = PricedTokenUsage::ZERO;
     let mut seven_day = PricedTokenUsage::ZERO;
@@ -245,17 +249,8 @@ pub fn make_local_usage(summaries: Vec<SessionSummary>, now: DateTime<Utc>) -> O
             today.add_tokens(&delta.tokens, cost);
         }
 
-        let bucket_date = Utc
-            .with_ymd_and_hms(
-                delta.date.year(),
-                delta.date.month(),
-                delta.date.day(),
-                0,
-                0,
-                0,
-            )
-            .unwrap();
-        let key = bucket_date.format("%Y-%m-%d").to_string();
+        let bucket_date = statistics.day_start(delta.date);
+        let key = statistics.day_key(delta.date);
         let entry = daily_usage
             .entry(key)
             .or_insert_with(|| (bucket_date, PricedTokenUsage::ZERO));
@@ -275,8 +270,15 @@ pub fn make_local_usage(summaries: Vec<SessionSummary>, now: DateTime<Utc>) -> O
         acc.add(delta, cost);
     }
 
-    let daily_buckets = make_seven_day_buckets(&daily_usage, now);
-    let usage_trend = make_usage_trend(&daily_usage, &seven_day, &previous_seven_day, &month, now);
+    let daily_buckets = make_seven_day_buckets(&daily_usage, now, statistics);
+    let usage_trend = make_usage_trend(
+        &daily_usage,
+        &seven_day,
+        &previous_seven_day,
+        &month,
+        now,
+        statistics,
+    );
 
     let detailed = DetailedUsage {
         today: today.clone(),
@@ -349,15 +351,12 @@ pub fn make_local_usage(summaries: Vec<SessionSummary>, now: DateTime<Utc>) -> O
 fn make_seven_day_buckets(
     daily_usage: &HashMap<String, (DateTime<Utc>, PricedTokenUsage)>,
     now: DateTime<Utc>,
+    statistics: crate::StatisticsTimeZone,
 ) -> Vec<DailyTokenBucket> {
-    let start = now - chrono::Duration::days(6);
     (0..7)
         .map(|offset| {
-            let date = start + chrono::Duration::days(offset);
-            let date = Utc
-                .with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
-                .unwrap();
-            let key = date.format("%Y-%m-%d").to_string();
+            let date = statistics.days_before_start(now, 6 - offset);
+            let key = statistics.day_key(date);
             DailyTokenBucket {
                 id: key.clone(),
                 label: date.format("%a").to_string(),
@@ -376,17 +375,14 @@ fn make_usage_trend(
     previous_seven_day: &PricedTokenUsage,
     month: &PricedTokenUsage,
     now: DateTime<Utc>,
+    statistics: crate::StatisticsTimeZone,
 ) -> UsageTrend {
-    let start = now - chrono::Duration::days(179);
     let mut buckets = Vec::new();
     let mut heatmap_days = Vec::new();
 
     for offset in 0..180 {
-        let date = start + chrono::Duration::days(offset);
-        let date = Utc
-            .with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
-            .unwrap();
-        let key = date.format("%Y-%m-%d").to_string();
+        let date = statistics.days_before_start(now, 179 - offset);
+        let key = statistics.day_key(date);
         let usage = daily_usage
             .get(&key)
             .map(|(_, u)| u.clone())
@@ -398,7 +394,7 @@ fn make_usage_trend(
             source_quality: UsageSourceQuality::Detailed,
         });
         heatmap_days.push(UsageHeatmapDay {
-            id: date.format("%Y-%m-%d").to_string(),
+            id: statistics.day_key(date),
             date,
             usage: if usage.tokens.visible_total_tokens() > 0 {
                 Some(usage)
@@ -444,7 +440,10 @@ fn make_usage_trend(
         summary,
         model_trends: None,
         month: month.clone(),
-        projected_month_cost_usd: projected_month_cost(month.estimated_cost_usd, now),
+        projected_month_cost_usd: projected_month_cost(
+            month.estimated_cost_usd,
+            statistics.date(now),
+        ),
         active_day_count,
         source_quality: UsageSourceQuality::Detailed,
     }
@@ -465,12 +464,12 @@ fn make_heatmap_thresholds(tokens: Vec<i64>) -> Vec<i64> {
     ]
 }
 
-fn projected_month_cost(month_cost: f64, now: DateTime<Utc>) -> Option<f64> {
+fn projected_month_cost(month_cost: f64, now: chrono::NaiveDate) -> Option<f64> {
     let day = now.day();
     let days_in_month = match now.month() {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         2 => {
-            if now.year() % 4 == 0 {
+            if now.year() % 4 == 0 && (now.year() % 100 != 0 || now.year() % 400 == 0) {
                 29
             } else {
                 28

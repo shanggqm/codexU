@@ -5,6 +5,15 @@ use codexu_core::readers::{
 use std::path::Path;
 use tempfile::tempdir;
 
+fn published_generation(cache: &Path) -> i64 {
+    rusqlite::Connection::open(cache.join("codex/history-index.sqlite"))
+        .unwrap()
+        .query_row("SELECT published_generation FROM index_meta", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
 fn write_usage(path: &Path, turn: &str, tokens: i64) {
     let event = serde_json::json!({
         "timestamp": "2026-10-10T00:00:00Z", "type": "event_msg",
@@ -34,8 +43,7 @@ async fn malformed_line_cannot_publish_or_cache_partial_history() {
             .lifetime_tokens,
         300
     );
-    let cache_file = cache.join("codex/session-usage-v1.json");
-    let complete_cache = std::fs::read(&cache_file).unwrap();
+    let complete_generation = published_generation(&cache);
     write_usage(&file, "a", 100);
     use std::io::Write;
     writeln!(
@@ -50,7 +58,7 @@ async fn malformed_line_cannot_publish_or_cache_partial_history() {
         .load_local_usage(temp.path(), Utc::now())
         .await
         .is_err());
-    assert_eq!(std::fs::read(&cache_file).unwrap(), complete_cache);
+    assert_eq!(published_generation(&cache), complete_generation);
     write_usage(&file, "a", 50);
     assert_eq!(
         reader
@@ -147,8 +155,7 @@ async fn locked_changed_file_recovers_without_a_second_change() {
             .lifetime_tokens,
         300
     );
-    let cache_file = cache.join("codex/session-usage-v1.json");
-    let complete_cache = std::fs::read(&cache_file).unwrap();
+    let complete_generation = published_generation(&cache);
     writeln!(std::fs::OpenOptions::new().append(true).open(&b).unwrap()).unwrap();
     let locked = std::fs::OpenOptions::new()
         .read(true)
@@ -159,7 +166,7 @@ async fn locked_changed_file_recovers_without_a_second_change() {
         .load_local_usage(temp.path(), Utc::now())
         .await
         .is_err());
-    assert_eq!(std::fs::read(&cache_file).unwrap(), complete_cache);
+    assert_eq!(published_generation(&cache), complete_generation);
     drop(locked);
     assert_eq!(
         reader

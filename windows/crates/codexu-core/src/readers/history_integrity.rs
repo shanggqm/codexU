@@ -13,6 +13,14 @@ pub enum HistoryReadError {
     InvalidRecord,
     #[error("Local history changed while being read. Refresh to retry.")]
     SourceChanged,
+    #[error("Local history index is in use. Refresh to retry.")]
+    IndexBusy,
+    #[error("Local history cache has reached its space budget. Refresh to retry.")]
+    CacheFull,
+    #[error("Local history processing exceeded its resource budget. Refresh to retry.")]
+    ResourceLimited,
+    #[error("Local history index could not be written. Refresh to retry.")]
+    CacheUnavailable,
 }
 
 pub const RETAINED_HISTORY_MESSAGE: &str =

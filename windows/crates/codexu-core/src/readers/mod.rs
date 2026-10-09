@@ -1,6 +1,8 @@
 pub mod claude_transcript;
 pub mod codex_app_server;
 pub mod codex_dashboard;
+pub mod codex_history_index;
+mod codex_history_parser;
 pub mod codex_state;
 pub mod codex_task_board;
 pub mod codex_transcript;

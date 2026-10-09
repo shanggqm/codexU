@@ -31,6 +31,8 @@ pub async fn refresh_usage(
 pub async fn clear_cache(
     state: State<'_, std::sync::Arc<crate::app_state::AppState>>,
 ) -> Result<(), String> {
-    crate::app_state::clear_cache(&state).await;
-    Ok(())
+    crate::app_state::clear_cache(&state).await.map_err(|e| {
+        warn!(error=%e,"Failed to clear local history cache");
+        "Failed to clear local history cache".to_string()
+    })
 }

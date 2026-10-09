@@ -1,4 +1,6 @@
-use chrono::{offset::LocalResult, DateTime, Duration, Local, NaiveDate, NaiveTime, TimeZone, Utc};
+use chrono::{
+    offset::LocalResult, DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, TimeZone, Utc,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub enum StatisticsTimeZone {
@@ -7,6 +9,25 @@ pub enum StatisticsTimeZone {
 }
 
 impl StatisticsTimeZone {
+    pub(crate) fn date(&self, date: DateTime<Utc>) -> NaiveDate {
+        match self {
+            Self::Local => date.with_timezone(&Local).date_naive(),
+            Self::Named(tz) => date.with_timezone(tz).date_naive(),
+        }
+    }
+    pub(crate) fn day_key(&self, date: DateTime<Utc>) -> String {
+        self.date(date).format("%Y-%m-%d").to_string()
+    }
+    pub(crate) fn identity(&self) -> String {
+        match self {
+            Self::Local => format!("local:{}", Local::now().offset()),
+            Self::Named(tz) => tz.name().to_string(),
+        }
+    }
+    pub(crate) fn month_start(&self, date: DateTime<Utc>) -> DateTime<Utc> {
+        let day = self.date(date).day() as i64;
+        self.days_before_start(date, day - 1)
+    }
     pub(crate) fn day_start(&self, date: DateTime<Utc>) -> DateTime<Utc> {
         match self {
             Self::Local => day_start_in_timezone(date, &Local),

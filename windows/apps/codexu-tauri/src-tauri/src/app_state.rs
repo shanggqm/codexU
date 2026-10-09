@@ -294,9 +294,11 @@ impl AppState {
                     if error.is::<codexu_core::readers::HistoryReadError>() {
                         if let Some(mut previous) = previous_dashboard {
                             let message = codexu_core::readers::RETAINED_HISTORY_MESSAGE;
-                            if !previous.messages.iter().any(|existing| existing == message) {
-                                previous.messages.push(message.to_string());
-                            }
+                            previous
+                                .messages
+                                .retain(|m| !m.starts_with("Local history "));
+                            previous.messages.push(message.to_string());
+                            previous.messages.push(error.to_string());
                             Ok(Some(previous))
                         } else {
                             Err(error)
@@ -383,17 +385,23 @@ impl AppState {
 }
 
 /// Clears the codexU file cache for the configured cache directory.
-pub async fn clear_cache(state: &Arc<AppState>) {
+pub async fn clear_cache(state: &Arc<AppState>) -> anyhow::Result<()> {
+    let _guard = state.refresh_lock.lock().await;
     let cache_dir = {
         let config = state.config.read().await;
         config.cache_dir.clone()
     };
-    let codex_cache = cache_dir.join("codex").join("session-usage-v1.json");
+    let index_cache = cache_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        codexu_core::readers::codex_history_index::clear(&index_cache)
+    })
+    .await??;
     let claude_cache = cache_dir.join("claude-code").join("session-usage-v1.json");
-    for path in [codex_cache, claude_cache] {
+    for path in [claude_cache] {
         if let Err(e) = tokio::fs::remove_file(&path).await {
             if e.kind() != std::io::ErrorKind::NotFound {
                 error!("Failed to remove cache file {}: {}", path.display(), e);
+                return Err(codexu_core::readers::HistoryReadError::CacheUnavailable.into());
             }
         }
     }
@@ -403,6 +411,7 @@ pub async fn clear_cache(state: &Arc<AppState>) {
     }
     state.source_generation.fetch_add(1, Ordering::SeqCst);
     info!("Cleared codexU cache");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -691,9 +700,41 @@ mod tests {
             .unwrap();
         std::fs::write(&file, b"{broken\n").unwrap();
         assert!(state.refresh_usage().await.is_err());
-        clear_cache(&state).await;
+        clear_cache(&state).await.unwrap();
         assert!(state.snapshot.read().await.is_none());
         assert!(state.refresh_usage().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn index_failure_exposes_current_cause_without_accumulating_obsolete_causes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (state, file) = state_with_complete_history(temp.path()).await;
+        let lock_path =
+            codexu_core::readers::codex_history_index::database_path(&temp.path().join("cache"))
+                .with_extension("lock");
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        lock.try_lock().unwrap();
+        let busy = state.refresh_usage().await.unwrap().unwrap();
+        assert_eq!(
+            busy.codex.snapshot.local.as_ref().unwrap().lifetime_tokens,
+            300
+        );
+        assert!(busy.messages.iter().any(|m| m.contains("index is in use")));
+        drop(lock);
+        std::fs::write(&file, b"{broken\n").unwrap();
+        let invalid = state.refresh_usage().await.unwrap().unwrap();
+        assert!(invalid
+            .messages
+            .iter()
+            .any(|m| m.contains("invalid record")));
+        assert!(!invalid
+            .messages
+            .iter()
+            .any(|m| m.contains("index is in use")));
     }
 
     #[tokio::test]
