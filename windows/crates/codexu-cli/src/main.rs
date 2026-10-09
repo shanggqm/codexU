@@ -39,6 +39,10 @@ struct Args {
     /// Write the full local Codex dashboard snapshot for the Web visual harness.
     #[arg(long)]
     dashboard: bool,
+
+    /// Rebuild and verify derived usage against full source files, including interior edits.
+    #[arg(long, conflicts_with = "dashboard")]
+    verify_history_index: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
@@ -88,6 +92,11 @@ async fn main() -> anyhow::Result<()> {
             info!("Cache directory: {}", cache_dir.display());
 
             let reader = CodexTranscriptReader::new(&cache_dir);
+            let reader = if args.verify_history_index {
+                reader.with_integrity_scan()
+            } else {
+                reader
+            };
             let now = Utc::now();
 
             let metadata = if tokio::fs::try_exists(&state_db_path).await.unwrap_or(false) {

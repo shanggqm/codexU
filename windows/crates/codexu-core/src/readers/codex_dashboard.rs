@@ -114,7 +114,7 @@ impl CodexDashboardProvider {
         let rollout_index = index_codex_rollout_files(&self.codex_root).await?;
         let transcript_reader = CodexTranscriptReader::new(&self.cache_dir);
         let (mut local_usage, summaries) = transcript_reader
-            .load_dashboard_inputs_from_index(&rollout_index, state_metadata, now)
+            .load_dashboard_inputs_from_index(&self.codex_root, &rollout_index, state_metadata, now)
             .await?;
         let Some(summaries) = summaries else {
             return Ok(None);
