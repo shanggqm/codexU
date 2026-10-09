@@ -359,7 +359,7 @@ fn make_seven_day_buckets(
             let key = statistics.day_key(date);
             DailyTokenBucket {
                 id: key.clone(),
-                label: date.format("%a").to_string(),
+                label: statistics.date(date).format("%a").to_string(),
                 tokens: daily_usage
                     .get(&key)
                     .map(|(_, u)| u.tokens.visible_total_tokens())

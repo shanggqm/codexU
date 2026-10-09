@@ -344,6 +344,7 @@ async fn local_calendar_archives_and_dst_windows_agree_with_displayed_totals() {
         .unwrap();
     assert_eq!(usage.today_tokens, 200);
     assert_eq!(usage.lifetime_tokens, 300);
+    assert_eq!(usage.daily_buckets.last().unwrap().label, "Sat");
     let db = Connection::open(database_path(&cache)).unwrap();
     let rows:i64=db.query_row("SELECT count(*) FROM day_archive WHERE generation=(SELECT published_generation FROM index_meta)",[],|r|r.get(0)).unwrap();
     assert_eq!(rows, 2);
