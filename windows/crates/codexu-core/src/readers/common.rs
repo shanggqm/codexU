@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::history_integrity::HistoryReadError;
 use crate::models::*;
 
 #[cfg(test)]
@@ -101,23 +102,26 @@ pub struct SessionSummary {
 }
 
 /// Enumerates all `.jsonl` files under `root`, sorted.
-pub async fn enumerate_jsonl_files(root: &Path) -> Vec<PathBuf> {
+pub async fn enumerate_jsonl_files(root: &Path) -> Result<Vec<PathBuf>, HistoryReadError> {
     #[cfg(test)]
     JSONL_ENUMERATION_COUNT.with(|count| count.set(count.get() + 1));
 
     let mut files = Vec::new();
     let mut dirs = vec![root.to_path_buf()];
     while let Some(dir) = dirs.pop() {
-        let mut entries = match tokio::fs::read_dir(&dir).await {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
-        while let Ok(Some(entry)) = entries.next_entry().await {
+        let mut entries = tokio::fs::read_dir(&dir)
+            .await
+            .map_err(|_| HistoryReadError::Unavailable)?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|_| HistoryReadError::Unavailable)?
+        {
             let path = entry.path();
-            let file_type = match entry.file_type().await {
-                Ok(ft) => ft,
-                Err(_) => continue,
-            };
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(|_| HistoryReadError::Unavailable)?;
             if file_type.is_dir() {
                 if !path
                     .file_name()
@@ -134,7 +138,7 @@ pub async fn enumerate_jsonl_files(root: &Path) -> Vec<PathBuf> {
         }
     }
     files.sort();
-    files
+    Ok(files)
 }
 
 /// Builds a file fingerprint from filesystem metadata.
@@ -152,14 +156,25 @@ pub async fn fingerprint_for(path: &Path) -> Option<FileFingerprint> {
 }
 
 /// Enumerates and fingerprints the live and archived Codex rollouts once.
-pub async fn index_codex_rollout_files(codex_root: &Path) -> Vec<CodexRolloutIndexEntry> {
+pub async fn index_codex_rollout_files(
+    codex_root: &Path,
+) -> Result<Vec<CodexRolloutIndexEntry>, HistoryReadError> {
+    let root_metadata = tokio::fs::metadata(codex_root)
+        .await
+        .map_err(|_| HistoryReadError::Unavailable)?;
+    if !root_metadata.is_dir() {
+        return Err(HistoryReadError::Unavailable);
+    }
     let mut paths = Vec::new();
     for root in [
         codex_root.join("archived_sessions"),
         codex_root.join("sessions"),
     ] {
-        if tokio::fs::try_exists(&root).await.unwrap_or(false) {
-            paths.extend(enumerate_jsonl_files(&root).await);
+        if tokio::fs::try_exists(&root)
+            .await
+            .map_err(|_| HistoryReadError::Unavailable)?
+        {
+            paths.extend(enumerate_jsonl_files(&root).await?);
         }
     }
     paths.sort();
@@ -167,10 +182,14 @@ pub async fn index_codex_rollout_files(codex_root: &Path) -> Vec<CodexRolloutInd
 
     let mut entries = Vec::with_capacity(paths.len());
     for path in paths {
-        let fingerprint = fingerprint_for(&path).await;
+        let fingerprint = Some(
+            fingerprint_for(&path)
+                .await
+                .ok_or(HistoryReadError::Unavailable)?,
+        );
         entries.push(CodexRolloutIndexEntry { path, fingerprint });
     }
-    entries
+    Ok(entries)
 }
 
 /// Aggregates a collection of session summaries into `LocalUsage`.

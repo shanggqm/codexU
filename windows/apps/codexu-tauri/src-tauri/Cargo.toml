@@ -25,5 +25,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 dirs = { workspace = true }
 
+[dev-dependencies]
+tempfile = "3.10"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]

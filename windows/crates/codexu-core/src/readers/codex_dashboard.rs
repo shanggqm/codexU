@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::models::leadership::LeadershipDashboardSnapshot;
 use chrono::{DateTime, Utc};
 
+use super::history_integrity::ensure_history_unchanged;
 use crate::models::*;
 use crate::readers::{
     build_leadership_snapshot, index_codex_rollout_files, CodexAppServerQuotaSnapshot,
@@ -110,7 +111,7 @@ impl CodexDashboardProvider {
     ) -> anyhow::Result<Option<CodexDashboardSnapshot>> {
         let (state_metadata, messages) = self.load_state_metadata().await?;
 
-        let rollout_index = index_codex_rollout_files(&self.codex_root).await;
+        let rollout_index = index_codex_rollout_files(&self.codex_root).await?;
         let transcript_reader = CodexTranscriptReader::new(&self.cache_dir);
         let (mut local_usage, summaries) = transcript_reader
             .load_dashboard_inputs_from_index(&rollout_index, state_metadata, now)
@@ -130,9 +131,10 @@ impl CodexDashboardProvider {
         if let Some(local) = local_usage.as_mut() {
             local.inference_performance = InferencePerformanceReader::new(&self.cache_dir)
                 .load_from_index(&rollout_index, now)
-                .await
-                .unwrap_or(None);
+                .await?;
         }
+
+        ensure_history_unchanged(&rollout_index).await?;
 
         Ok(Some(CodexDashboardSnapshot {
             codex: build_codex_runtime_snapshot(local_usage, task_board, now),
@@ -356,8 +358,8 @@ mod tests {
         assert!(snapshot.is_some());
         assert_eq!(
             crate::readers::common::rollout_io_counts(),
-            (1, 1),
-            "one refresh should enumerate the existing rollout root once and fingerprint its file once"
+            (1, 4),
+            "one shared enumeration plus fingerprint checks at discovery, usage-cache, inference-cache and dashboard publication"
         );
     }
 

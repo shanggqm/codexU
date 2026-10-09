@@ -35,9 +35,12 @@ use serde::{Deserialize, Serialize};
 
 use super::codex_state::CodexThreadMetadata;
 use super::common::*;
+use super::history_integrity::{
+    ensure_history_unchanged, write_cache_atomically, HistoryReadError,
+};
 use crate::models::*;
 
-const CODEX_CACHE_VERSION: i32 = 3;
+const CODEX_CACHE_VERSION: i32 = 4;
 
 /// On-disk cache for Codex transcript summaries.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -179,7 +182,7 @@ impl CodexTranscriptReader {
         &self,
         data_root: impl AsRef<Path>,
     ) -> anyhow::Result<Option<Vec<CodexTranscriptSummary>>> {
-        let index = index_codex_rollout_files(data_root.as_ref()).await;
+        let index = index_codex_rollout_files(data_root.as_ref()).await?;
         self.load_local_summaries_from_index(&index).await
     }
 
@@ -213,7 +216,7 @@ impl CodexTranscriptReader {
                 }
             }
 
-            let summary = parse_transcript(file, fingerprint).await;
+            let summary = parse_transcript(file, fingerprint).await?;
             if let Some(fp) = fingerprint {
                 cache.entries.insert(
                     key,
@@ -227,6 +230,7 @@ impl CodexTranscriptReader {
             summaries.push(summary);
         }
 
+        ensure_history_unchanged(index).await?;
         write_cache(&self.cache_dir, &cache).await;
         Ok(Some(summaries))
     }
@@ -320,8 +324,7 @@ async fn write_cache(cache_dir: &Path, cache: &CodexSessionDiskCache) {
     let path = cache_dir.join("codex").join("session-usage-v1.json");
     if let Ok(data) = serde_json::to_vec(cache) {
         if data.len() as u64 <= MAX_CACHE_BYTES {
-            let _ = tokio::fs::create_dir_all(path.parent().unwrap()).await;
-            let _ = tokio::fs::write(&path, data).await;
+            let _ = write_cache_atomically(&path, &data).await;
         }
     }
 }
@@ -329,7 +332,7 @@ async fn write_cache(cache_dir: &Path, cache: &CodexSessionDiskCache) {
 async fn parse_transcript(
     file: &Path,
     fingerprint: Option<&FileFingerprint>,
-) -> CodexTranscriptSummary {
+) -> Result<CodexTranscriptSummary, HistoryReadError> {
     let session_id = file
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
@@ -349,10 +352,9 @@ async fn parse_transcript(
         task_intervals: Vec::new(),
     };
 
-    let data = match tokio::fs::read(file).await {
-        Ok(data) => data,
-        Err(_) => return summary,
-    };
+    let data = tokio::fs::read(file)
+        .await
+        .map_err(|_| HistoryReadError::Unavailable)?;
 
     let mut seen_turn_ids = HashSet::new();
     let mut started_tasks: HashMap<String, DateTime<Utc>> = HashMap::new();
@@ -361,17 +363,18 @@ async fn parse_transcript(
     let mut turn_models: HashMap<String, String> = HashMap::new();
 
     for line in data.split(|b| *b == b'\n') {
-        if line.is_empty() || line.len() > MAX_LINE_BYTES {
+        if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let text = match std::str::from_utf8(line) {
-            Ok(text) => text,
-            Err(_) => continue,
-        };
-        let object: serde_json::Value = match serde_json::from_str(text) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+        if line.len() > MAX_LINE_BYTES {
+            return Err(HistoryReadError::InvalidRecord);
+        }
+        let text = std::str::from_utf8(line).map_err(|_| HistoryReadError::InvalidRecord)?;
+        let object: serde_json::Value =
+            serde_json::from_str(text).map_err(|_| HistoryReadError::InvalidRecord)?;
+        if !object.is_object() {
+            return Err(HistoryReadError::InvalidRecord);
+        }
 
         let envelope_type = object.get("type").and_then(|v| v.as_str());
         let payload = match object.get("payload") {
@@ -524,7 +527,7 @@ async fn parse_transcript(
         });
     }
 
-    summary
+    Ok(summary)
 }
 
 #[derive(Debug)]

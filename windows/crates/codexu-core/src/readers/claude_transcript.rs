@@ -98,7 +98,7 @@ impl ClaudeCodeTranscriptReader {
             return Ok(None);
         }
 
-        let files = enumerate_jsonl_files(projects_root).await;
+        let files = enumerate_jsonl_files(projects_root).await?;
         if files.is_empty() {
             return Ok(None);
         }
