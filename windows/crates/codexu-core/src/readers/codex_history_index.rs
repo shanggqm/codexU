@@ -185,8 +185,7 @@ fn load_inner(
     }
     // Verify every path again before selecting the staged facts for publication.
     for entry in index {
-        let file = File::open(&entry.path).map_err(|_| HistoryReadError::Unavailable)?;
-        check_fingerprint(&file, entry)?;
+        verify_source(&db, &root_id, entry)?;
     }
     let summaries = materialize(&db, &root_id, scan)?;
     publish_days(
@@ -462,6 +461,24 @@ fn check_fingerprint(file: &File, entry: &CodexRolloutIndexEntry) -> anyhow::Res
         .as_ref()
         .ok_or(HistoryReadError::Unavailable)?;
     if metadata.len() as i64 != fp.file_size || Some(modified) != fp.modification_time_ns {
+        return Err(HistoryReadError::SourceChanged.into());
+    }
+    Ok(())
+}
+
+fn verify_source(
+    db: &Connection,
+    root: &str,
+    entry: &CodexRolloutIndexEntry,
+) -> anyhow::Result<()> {
+    let file = File::open(&entry.path).map_err(|_| HistoryReadError::Unavailable)?;
+    check_fingerprint(&file, entry)?;
+    let stored: String = db.query_row(
+        "SELECT identity FROM source WHERE root_id=?1 AND path=?2",
+        params![root, entry.path.to_string_lossy()],
+        |r| r.get(0),
+    )?;
+    if file_identity(&file)? != stored {
         return Err(HistoryReadError::SourceChanged.into());
     }
     Ok(())
@@ -842,5 +859,44 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[tokio::test]
+    async fn final_source_check_rejects_replacement_with_matching_size_and_mtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("cache");
+        std::fs::create_dir(temp.path().join("sessions")).unwrap();
+        let path = temp.path().join("sessions/rollout-a.jsonl");
+        let contents = event(1);
+        std::fs::write(&path, &contents).unwrap();
+        super::super::CodexTranscriptReader::new(&cache)
+            .load_local_usage(temp.path(), Utc::now())
+            .await
+            .unwrap();
+        let index = super::super::index_codex_rollout_files(temp.path())
+            .await
+            .unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let replacement = temp.path().join("new.jsonl");
+        std::fs::write(&replacement, &contents).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .open(&replacement)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(replacement, &path).unwrap();
+        let db = Connection::open(database_path(&cache)).unwrap();
+        let error = verify_source(
+            &db,
+            &hex(temp.path().to_string_lossy().as_bytes()),
+            &index[0],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<HistoryReadError>(),
+            Some(HistoryReadError::SourceChanged)
+        ));
     }
 }
