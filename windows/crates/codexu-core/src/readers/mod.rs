@@ -5,6 +5,7 @@ pub mod codex_state;
 pub mod codex_task_board;
 pub mod codex_transcript;
 pub mod common;
+pub mod history_integrity;
 pub mod inference_performance;
 pub mod leadership;
 
@@ -17,5 +18,6 @@ pub use codex_state::{CodexStateReader, CodexThreadMetadata};
 pub use codex_task_board::CodexTaskBoardReader;
 pub use codex_transcript::CodexTranscriptReader;
 pub use common::*;
+pub use history_integrity::{HistoryReadError, RETAINED_HISTORY_MESSAGE};
 pub use inference_performance::InferencePerformanceReader;
 pub use leadership::*;

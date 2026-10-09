@@ -502,7 +502,7 @@ async fn rollout_cache_hits_and_invalidates_by_size_mtime_and_parser_schema() {
     );
     assert_eq!(entry["file_size"], original_size);
     assert!(entry["modification_time_ns"].as_i64().is_some());
-    assert_eq!(entry["parser_version"], 2);
+    assert_eq!(entry["parser_version"], 3);
 
     rewrite_session_at(
         &session,
