@@ -19,14 +19,16 @@ codexU is a macOS menu bar and desktop app for tracking OpenAI Codex / ChatGPT C
 
 ## Windows Release
 
-The current Windows x86_64 desktop version is available in the [GitHub v1.3.2 Release](https://github.com/shanggqm/codexU/releases/tag/v1.3.2) as an independent Tauri Dashboard in both MSI and NSIS formats:
+The current Windows x86_64 desktop version is available in the [GitHub Windows v1.3.3 Release](https://github.com/shanggqm/codexU/releases/tag/windows-v1.3.3) as an independent Tauri Dashboard in both MSI and NSIS formats:
 
-- `codexU-1.3.2-windows-x86_64.msi`: Windows Installer package.
-- `codexU-1.3.2-windows-x86_64-setup.exe`: NSIS setup wizard.
+- `codexU-1.3.3-windows-x86_64.msi`: Windows Installer package.
+- `codexU-1.3.3-windows-x86_64-setup.exe`: NSIS setup wizard.
 - Windows 10/11 x86_64 is supported; Windows ARM64 is not packaged yet.
 - Verification note: this Windows V0 native visual matrix and shell-lifecycle evidence was collected on a host classified as Windows 11 by build `26200`; Windows 10 remains a supported target but was not observed in this run.
 - The Windows version reads local data under `%USERPROFILE%\.codex\` and preserves the local-first privacy boundary. It does not upload usage, threads, paths, logs, or account data.
 - The Windows version currently supports Codex only; Claude Code is not supported yet.
+
+Windows v1.3.3 adds complete-history protection, an incremental SQLite index and daily archives, startup summary restoration, and independent quota/task/history refresh. It includes single-instance restoration and stable toolchain fixes. macOS remains at v1.3.2; this Windows release does not rebuild macOS installers.
 
 The Windows version is an independent Tauri desktop implementation. The public Windows installers are not code-signed by the repository's default workflow, so Windows may show a security prompt on first launch. Windows and macOS continue to evolve as separate implementations, so their feature coverage is not yet identical.
 

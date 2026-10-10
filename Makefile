@@ -185,6 +185,10 @@ release-package: memory-risk-check
 release-windows:
 	$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-release.ps1 -Version "$(VERSION)"
 
+.PHONY: release-windows-check
+release-windows-check: memory-risk-check
+	$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File scripts/check-windows-release.ps1 -Version "$(VERSION)"
+
 release-cross-platform-check:
 	./scripts/check-cross-platform-release-assets.sh "$(VERSION)" "$(DIST_DIR)"
 

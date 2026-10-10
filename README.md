@@ -21,14 +21,16 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 
 ## Windows 版本已发布
 
-当前 Windows x86_64 桌面版本随 [GitHub v1.3.2 Release](https://github.com/shanggqm/codexU/releases/tag/v1.3.2) 提供，并包含完整的独立 Tauri Dashboard；安装包提供 MSI 与 NSIS 两种方式：
+当前 Windows x86_64 桌面版本随 [GitHub Windows v1.3.3 Release](https://github.com/shanggqm/codexU/releases/tag/windows-v1.3.3) 提供，并包含完整的独立 Tauri Dashboard；安装包提供 MSI 与 NSIS 两种方式：
 
-- `codexU-1.3.2-windows-x86_64.msi`：适合通过 Windows Installer 安装。
-- `codexU-1.3.2-windows-x86_64-setup.exe`：适合通过 NSIS 安装向导安装。
+- `codexU-1.3.3-windows-x86_64.msi`：适合通过 Windows Installer 安装。
+- `codexU-1.3.3-windows-x86_64-setup.exe`：适合通过 NSIS 安装向导安装。
 - 支持 Windows 10/11 x86_64；Windows ARM64 当前尚未打包。
 - 验证环境说明：本轮 Windows V0 的原生视觉矩阵与 shell lifecycle 验收在按 build `26200` 归类的 Windows 11 环境完成；Windows 10 仍是支持目标，但未在本轮实机观测。
 - Windows 版本读取 `%USERPROFILE%\.codex\` 等本机数据，保持本地优先和隐私边界，不上传 usage、线程、路径、日志或账户数据。
 - Windows 版本当前只支持 Codex，暂不支持 Claude Code。
+
+Windows v1.3.3 加入完整历史保护、SQLite 增量索引与每日归档，以及启动摘要和额度/任务/历史独立刷新；包含单实例和 stable 工具链修复。macOS 仍为 v1.3.2，本次 Windows 更新不重打 macOS 安装包。
 
 Windows 版本是独立的 Tauri 桌面实现，当前发布包尚未由仓库默认流程进行代码签名；Windows 可能在首次运行时显示安全提示。Windows 与 macOS 的功能实现仍在分别演进，当前功能覆盖并不完全相同。
 

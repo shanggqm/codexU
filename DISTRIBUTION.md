@@ -138,6 +138,22 @@ make release-cross-platform-check VERSION=<version>
 
 The workflow intentionally produces artifacts but does not create or publish a GitHub Release. After reviewing the verified artifact bundle, create the release manually with these eight exact assets: four installers and their four `.sha256` files. This keeps tag, release notes, and publication as explicit human-controlled steps.
 
+## Independent Windows releases
+
+When only Windows changes, retain the macOS Info.plist version, build number, DMGs and existing Release. Use a new Windows semantic version, update `windows/apps/codexu-tauri/src-tauri/tauri.conf.json`, the Windows sections of both READMEs, `windows/README.md`, `CHANGELOG.md` and `docs/release-notes-windows-v<version>.md`.
+
+Run the global memory gate and review its inventory before metadata or packaging. Build from an explicitly reviewed source with the existing `release-packages.yml` dispatch using `platform=windows`, or use `make release-windows VERSION=<version>`. Bind the runner source SHA and effective Tauri version to the release notes. Download the two installers, their checksums and manifest into `dist/windows/`, fill the real hashes into the notes, then run:
+
+```sh
+make release-windows-check VERSION=<version>
+```
+
+This wrapper repeats the memory gate and verifies Windows metadata, manifest, SHA-256, MSI ProductVersion/x64 architecture, NSIS ProductVersion, signature status and tag/Release absence. It replaces the macOS-specific `release-check` for this Windows-only route; the two-platform route remains unchanged.
+
+Generate the concise public body with the existing `make-github-release-body.sh` helper. Commit the verified metadata, synchronize the canonical upstream, and create an annotated `windows-v<version>` tag pointing to the release metadata commit. This independent tag does not match the dual-platform `v*` build trigger. Create a stable `codexU Windows v<version>` Release with the two installers and two checksums, using `--verify-tag --latest=false`. The shared Latest remains a release containing macOS downloads; Windows README links point directly to the independent release. Never replace old installers under an existing version.
+
+Verify the tag commit, public Release state/body and all four uploaded asset hashes. The default Windows installers are unsigned; do not claim Authenticode signing or native install acceptance without executing those checks. This route neither installs the application nor modifies macOS release assets.
+
 ## Developer ID signed build
 
 For broad distribution outside the App Store, sign with a Developer ID Application certificate:

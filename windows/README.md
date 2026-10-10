@@ -89,7 +89,7 @@ cargo test --release -p codexu-core --test incremental_history_scale -- --ignore
 
 ## 安装（推荐）
 
-Windows 用户可以直接打开[最新 GitHub Release](https://github.com/shanggqm/codexU/releases/latest)，在
+Windows 用户可以直接打开[Windows v1.3.3 Release](https://github.com/shanggqm/codexU/releases/tag/windows-v1.3.3)，在
 Assets 中下载带有 `-setup.exe` 后缀的 NSIS 安装包：
 
 1. 下载 `codexU-<version>-windows-x86_64-setup.exe`。
