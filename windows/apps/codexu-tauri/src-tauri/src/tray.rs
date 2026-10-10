@@ -65,7 +65,7 @@ pub fn setup_tray(app: &AppHandle, language: ResolvedLanguage) -> anyhow::Result
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     let state = app.state::<std::sync::Arc<crate::app_state::AppState>>();
-                    let _ = refresh_usage(app.clone(), state).await;
+                    let _ = refresh_usage(state).await;
                 });
             }
             "quit" => app.exit(0),

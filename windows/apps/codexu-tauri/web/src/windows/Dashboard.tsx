@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Activity, CircleDashed } from 'lucide-react';
 import { Header } from '../components/Header';
 import { DashboardHome } from '../components/DashboardHome';
+import { RefreshStatus } from '../components/RefreshStatus';
 import { useSettings } from '../hooks/useSettings';
 import { useUsage } from '../hooks/useUsage';
 import { applyAppTheme } from '../utils/appTheme';
@@ -10,7 +11,7 @@ import { useI18n } from '../i18n/I18nProvider';
 
 export function Dashboard() {
   const { t } = useI18n();
-  const { dashboard, loading, error, refresh } = useUsage();
+  const { dashboard, status, loading, error, refresh } = useUsage();
   const { settings, update } = useSettings();
 
   useEffect(() => {
@@ -22,7 +23,8 @@ export function Dashboard() {
 
   const localUsage = dashboard?.codex?.snapshot?.local ?? null;
   const lastUpdated =
-    dashboard?.codex?.snapshot?.refreshed_at ?? dashboard?.refreshed_at ?? localUsage?.last_updated_at ?? null;
+    status ? status.history.updated_at : dashboard?.codex?.snapshot?.refreshed_at ?? dashboard?.refreshed_at ?? localUsage?.last_updated_at ?? null;
+  const messages = dashboard?.messages.filter(message => !status || !message.startsWith('Local history ')) ?? [];
   const quotaStatus = dashboard?.codex?.status ?? 'local_only';
   const quotaStatusLabel =
     quotaStatus === 'available'
@@ -40,7 +42,7 @@ export function Dashboard() {
     applyAppTheme(theme, settings?.config.palette_id ?? DEFAULT_PALETTE_ID);
   };
 
-  if (error) {
+  if (error && !dashboard) {
     return (
       <div className="h-full flex flex-col windows-glass-page">
         <Header
@@ -107,7 +109,7 @@ export function Dashboard() {
               <span className={`inline-flex items-center gap-1.5 chip-like ${quotaStatusClass}`}>
                 <Activity size={12} /> {quotaStatusLabel}
               </span>
-              <span className="text-xs text-tertiary">{t('dashboard.status.threads', { count: localUsage?.thread_count ?? 0 })}</span>
+              {localUsage ? <span className="text-xs text-tertiary">{t('dashboard.status.threads', { count: localUsage.thread_count })}</span> : null}
               {!localUsage ? (
                 <span className="text-xs text-tertiary">
                   {dashboard ? t('dashboard.status.noLocalUsageDetails') : t('dashboard.status.waitingSnapshot')}
@@ -121,9 +123,11 @@ export function Dashboard() {
               })}
             </span>
           </div>
-          {dashboard?.messages?.length ? (
+          <RefreshStatus status={status} />
+          {error && dashboard ? <p className="text-xs text-status-warn" role="alert">{t('dashboard.refresh.connectionFailed')}</p> : null}
+          {messages.length ? (
             <p className="text-xs text-tertiary mt-2">
-              {t('dashboard.errors.status', { messages: dashboard.messages.join(' · ') })}
+              {t('dashboard.errors.status', { messages: messages.join(' · ') })}
             </p>
           ) : null}
 
