@@ -14,15 +14,15 @@ jobs:
       - name: Build
         run: make build
       - name: Palette package and rendering tests
-        run: ./scripts/test-palettes.sh
+        run: build/codexU.app/Contents/MacOS/codexU --self-test-palettes
       - name: Menu bar rendering tests
-        run: ./scripts/test-status-item.sh
+        run: build/codexU.app/Contents/MacOS/codexU --self-test-status-item
       - name: Particle animation tests
-        run: ./scripts/test-particle-animation.sh
+        run: build/codexU.app/Contents/MacOS/codexU --self-test-particle-animation
       - name: Rate limit tests
-        run: ./scripts/test-rate-limits.sh
+        run: build/codexU.app/Contents/MacOS/codexU --self-test-rate-limits
       - name: Statistics time zone tests
-        run: ./scripts/test-statistics-time-zone.sh
+        run: build/codexU.app/Contents/MacOS/codexU --self-test-statistics-time-zone
 
   windows-rust-format:
     runs-on: windows-latest
