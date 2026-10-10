@@ -5,6 +5,8 @@ export function RefreshStatus({ status }: { status: DashboardView['refresh'] | n
   const { t } = useI18n();
   if (!status) return null;
   const message = (state: BranchRefreshState) => {
+    if (state.restored && state.phase === 'loading') return t('dashboard.refresh.updatingSummary');
+    if (state.restored && state.phase === 'failed') return t('dashboard.refresh.failedSummary');
     if (state.phase === 'failed') return state.has_data ? t('dashboard.refresh.failedRetained') : t('dashboard.refresh.failed');
     if (state.phase === 'loading') return state.has_data ? t('dashboard.refresh.updatingRetained') : t('dashboard.refresh.loading');
     if (state.restored) return t('dashboard.refresh.restored');

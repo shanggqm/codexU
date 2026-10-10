@@ -20,7 +20,7 @@ test('real AppState restart, independent slow/failing branches, recovery and sou
     await page.click('#apply-scenario');
   }
   await page.goto('/tests/refresh-harness.html');
-  await expect(page.getByTestId('refresh-history')).toContainText('showing previous data');
+  await expect(page.getByTestId('refresh-history')).toContainText('saved summary; details pending');
   await expect(page.getByTestId('refresh-quota')).toContainText('Up to date');
   await expect(page.getByTestId('refresh-tasks')).toContainText('Up to date');
   await expect(page.getByRole('region', { name: 'Local token metrics' })).toContainText('300');
