@@ -55,8 +55,29 @@ test('real AppState restart, independent slow/failing branches, recovery and sou
   await expect(metrics).not.toContainText('300');
   await observe('cold-history-missing');
   await expect(page.getByTestId('refresh-history')).toHaveText('历史: 已更新', { timeout: 10_000 });
+  // Hold one genuine old AppState response while newer source updates reach the hook.
+  await page.evaluate(async () => {
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    const oldView = await invoke('get_usage_state');
+    let held = false;
+    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === 'get_usage_state' && !held) {
+        held = true;
+        await new Promise(resolve => { window.__releaseOldResponse = resolve; });
+        return oldView;
+      }
+      return invoke(command, args);
+    };
+  });
   await scenario('source');
   await expect(page.getByRole('region', { name: '本地 Token 指标' })).toContainText('50');
+  await page.evaluate(async () => {
+    if (!window.__releaseOldResponse) throw Error('Old response was not held');
+    window.__releaseOldResponse();
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+  });
+  await expect(page.getByRole('region', { name: '本地 Token 指标' })).not.toContainText('300');
   await observe('new-source-complete');
   await writeFile(path.join(evidence, 'observations.json'), JSON.stringify({ identity: await getRepositoryIdentity(), transport: 'loopback HTTP IPC adapter', account: 'synthetic, no authentication', observations }, null, 2) + '\n');
 });
