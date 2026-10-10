@@ -9,6 +9,9 @@ use super::common::{
     index_codex_rollout_files, CodexRolloutIndexEntry, FileFingerprint, MAX_LINE_BYTES,
     READ_CHUNK_BYTES,
 };
+use super::history_integrity::{
+    ensure_history_unchanged, write_cache_atomically, HistoryReadError,
+};
 use crate::models::{
     InferencePerformanceArchive, InferencePerformanceBuilder, InferencePerformanceHistory,
     InferencePerformanceSample, TokenBreakdown, INFERENCE_MINIMUM_CALL_DURATION_SECONDS,
@@ -16,7 +19,7 @@ use crate::models::{
 use crate::StatisticsTimeZone;
 
 const INFERENCE_CACHE_VERSION: i32 = 2;
-const INFERENCE_PARSER_VERSION: i32 = 2;
+const INFERENCE_PARSER_VERSION: i32 = 3;
 const MAXIMUM_ARCHIVE_BYTES: u64 = 32 * 1024 * 1024;
 const MAXIMUM_SAMPLE_COUNT: usize = 50_000;
 
@@ -101,7 +104,7 @@ impl InferencePerformanceReader {
         codex_root: impl AsRef<Path>,
         now: DateTime<Utc>,
     ) -> anyhow::Result<Option<InferencePerformanceHistory>> {
-        let index = index_codex_rollout_files(codex_root.as_ref()).await;
+        let index = index_codex_rollout_files(codex_root.as_ref()).await?;
         self.load_from_index(&index, now).await
     }
 
@@ -134,7 +137,7 @@ impl InferencePerformanceReader {
             let parsed = if let Some(parsed) = cached {
                 parsed
             } else {
-                let parsed = parse_inference_samples(file).await;
+                let parsed = parse_inference_samples(file).await?;
                 if let Some(fingerprint) = indexed.fingerprint {
                     cache.entries.insert(
                         key,
@@ -153,6 +156,7 @@ impl InferencePerformanceReader {
                 .or_default()
                 .extend(parsed.samples);
         }
+        ensure_history_unchanged(index).await?;
         for (source_id, samples) in samples_by_source_id {
             cache
                 .archive
@@ -192,12 +196,7 @@ impl InferencePerformanceReader {
         if data.len() as u64 > MAXIMUM_ARCHIVE_BYTES {
             return false;
         }
-        if let Some(parent) = path.parent() {
-            if tokio::fs::create_dir_all(parent).await.is_err() {
-                return false;
-            }
-        }
-        tokio::fs::write(path, data).await.is_ok()
+        write_cache_atomically(&path, &data).await.is_ok()
     }
 
     fn archive_path(&self) -> PathBuf {
@@ -213,11 +212,11 @@ struct ParsedInferenceFile {
     samples: Vec<InferencePerformanceSample>,
 }
 
-async fn parse_inference_samples(path: &Path) -> ParsedInferenceFile {
+async fn parse_inference_samples(path: &Path) -> Result<ParsedInferenceFile, HistoryReadError> {
     let mut parsed = ParsedInferenceFile::default();
-    let Ok(file) = tokio::fs::File::open(path).await else {
-        return parsed;
-    };
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|_| HistoryReadError::Unavailable)?;
 
     let mut tracker = InferenceCallTracker::default();
     let mut seen_sample_ids = HashSet::new();
@@ -226,9 +225,10 @@ async fn parse_inference_samples(path: &Path) -> ParsedInferenceFile {
     let mut oversized = false;
 
     loop {
-        let Ok(buffer) = reader.fill_buf().await else {
-            break;
-        };
+        let buffer = reader
+            .fill_buf()
+            .await
+            .map_err(|_| HistoryReadError::Unavailable)?;
         if buffer.is_empty() {
             break;
         }
@@ -260,7 +260,7 @@ async fn parse_inference_samples(path: &Path) -> ParsedInferenceFile {
         apply_inference_line(&line, &mut parsed, &mut tracker, &mut seen_sample_ids);
     }
 
-    parsed
+    Ok(parsed)
 }
 
 fn apply_inference_line(

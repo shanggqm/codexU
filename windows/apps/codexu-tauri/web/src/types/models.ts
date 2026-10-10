@@ -317,3 +317,21 @@ export interface CodexDashboardSnapshot {
   refreshed_at: number;
   messages: string[];
 }
+
+export interface BranchRefreshState {
+  phase: 'waiting' | 'loading' | 'current' | 'failed';
+  has_data: boolean;
+  restored: boolean;
+  updated_at: number | null;
+}
+
+export interface DashboardView {
+  dashboard: CodexDashboardSnapshot | null;
+  refresh: {
+    quota: BranchRefreshState;
+    tasks: BranchRefreshState;
+    history: BranchRefreshState;
+    summary_write_failed: boolean;
+  };
+  revision: number;
+}

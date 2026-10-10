@@ -4,11 +4,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::Manager;
-use tracing::info;
+use tauri::{Emitter, Manager};
+use tracing::{info, warn};
 
 mod app_state;
 mod commands;
+mod history_summary;
 mod tray;
 
 use app_state::AppState;
@@ -124,6 +125,11 @@ fn main() {
         .init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Err(error) = tray::show_main_window(app) {
+                warn!(error = %error, "Could not restore main window for secondary launch");
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let background_capture = is_background_capture();
@@ -138,6 +144,14 @@ fn main() {
             info!("App data dir: {}", app_data_dir.display());
 
             let state = Arc::new(AppState::new(app_data_dir));
+            let mut changes = state.subscribe_changes();
+            let event_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while changes.changed().await.is_ok() {
+                    let revision = *changes.borrow_and_update();
+                    let _ = event_app.emit("usage:updated", revision);
+                }
+            });
             let initial_language = state
                 .config
                 .try_read()
@@ -171,6 +185,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::usage::get_local_usage,
+            commands::usage::get_usage_state,
             commands::usage::refresh_usage,
             commands::usage::clear_cache,
             commands::settings::get_settings,

@@ -5,14 +5,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use codexu_core::models::TaskBoard;
+use codexu_core::readers::{codex_dashboard::empty_dashboard, CodexTaskBoardReader};
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 use codexu_core::models::CodexDashboardSnapshot;
+#[cfg(not(test))]
+use codexu_core::readers::read_installed_codex_quota;
 use codexu_core::readers::{
-    apply_official_quota, read_installed_codex_quota, retain_last_verified_quota,
-    CodexAppServerQuotaSnapshot, CodexDashboardProvider,
+    apply_official_quota, retain_last_verified_quota, CodexAppServerQuotaSnapshot,
+    CodexDashboardProvider,
 };
 
 /// User-configurable app settings.
@@ -159,14 +164,61 @@ pub struct CachedSnapshot {
     pub source_generation: u64,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RefreshPhase {
+    #[default]
+    Waiting,
+    Loading,
+    Current,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct BranchState {
+    pub phase: RefreshPhase,
+    pub has_data: bool,
+    pub restored: bool,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct RefreshStatus {
+    pub quota: BranchState,
+    pub tasks: BranchState,
+    pub history: BranchState,
+    pub summary_write_failed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DashboardView {
+    pub dashboard: Option<CodexDashboardSnapshot>,
+    pub refresh: RefreshStatus,
+    pub revision: u64,
+}
+
+enum BranchResult {
+    History(anyhow::Result<(Option<CodexDashboardSnapshot>, bool)>),
+    Quota(CodexAppServerQuotaSnapshot),
+    Tasks(anyhow::Result<Option<TaskBoard>>),
+}
+
 /// Shared application state.
 pub struct AppState {
     pub config: RwLock<AppConfig>,
     pub runtime_language: RwLock<ResolvedLanguage>,
     pub snapshot: RwLock<Option<CachedSnapshot>>,
-    pub refresh_lock: Mutex<()>,
+    pub refresh_lock: Arc<Mutex<()>>,
+    pub refresh_status: RwLock<RefreshStatus>,
+    changes: watch::Sender<u64>,
     pub app_data_dir: PathBuf,
     source_generation: AtomicU64,
+    #[cfg(test)]
+    branch_controls: RwLock<std::collections::HashMap<String, (u64, bool)>>,
+    #[cfg(test)]
+    branch_gates: RwLock<std::collections::HashMap<String, Arc<tokio::sync::Semaphore>>>,
+    #[cfg(test)]
+    test_quota: RwLock<Option<CodexAppServerQuotaSnapshot>>,
     #[cfg(test)]
     pub(crate) refresh_call_count: Arc<AtomicUsize>,
     #[cfg(test)]
@@ -178,13 +230,36 @@ impl AppState {
     pub fn new(app_data_dir: PathBuf) -> Self {
         let config = AppConfig::load(&app_data_dir);
         let runtime_language = config.language.resolved(ResolvedLanguage::En);
+        let restored =
+            crate::history_summary::load(&app_data_dir, &config.codex_root, &config.cache_dir);
+        let mut status = RefreshStatus::default();
+        if let Some(saved) = restored.as_ref() {
+            status.history.has_data = saved.codex.snapshot.local.is_some();
+            status.history.restored = true;
+            status.history.updated_at = Some(saved.refreshed_at.timestamp_millis());
+        }
+        let cached = restored.map(|dashboard| CachedSnapshot {
+            refreshed_at: DateTime::<Utc>::UNIX_EPOCH,
+            source_key: DashboardSourceKey::from_config(&config),
+            source_generation: 0,
+            dashboard: Some(dashboard),
+        });
+        let (changes, _) = watch::channel(0);
         Self {
             config: RwLock::new(config),
             runtime_language: RwLock::new(runtime_language),
-            snapshot: RwLock::new(None),
-            refresh_lock: Mutex::new(()),
+            snapshot: RwLock::new(cached),
+            refresh_lock: Arc::new(Mutex::new(())),
+            refresh_status: RwLock::new(status),
+            changes,
             app_data_dir,
             source_generation: AtomicU64::new(0),
+            #[cfg(test)]
+            branch_controls: RwLock::new(std::collections::HashMap::new()),
+            #[cfg(test)]
+            branch_gates: RwLock::new(std::collections::HashMap::new()),
+            #[cfg(test)]
+            test_quota: RwLock::new(None),
             #[cfg(test)]
             refresh_call_count: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
@@ -207,6 +282,7 @@ impl AppState {
     }
 
     /// Get the cached usage, refreshing if the cache is missing or older than `max_age_secs`.
+    #[cfg(test)]
     pub async fn get_usage(
         self: &Arc<Self>,
         max_age_secs: u64,
@@ -248,6 +324,7 @@ impl AppState {
     }
 
     /// Force a refresh of the usage snapshot.
+    #[cfg(test)]
     pub async fn refresh_usage(self: &Arc<Self>) -> anyhow::Result<Option<CodexDashboardSnapshot>> {
         let _guard = self.refresh_lock.lock().await;
         let source = self.current_source_key().await;
@@ -255,92 +332,362 @@ impl AppState {
             .await
     }
 
+    pub fn subscribe_changes(&self) -> watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+
+    fn notify(&self) {
+        self.changes.send_modify(|revision| *revision += 1);
+    }
+
+    pub async fn current_view(&self) -> DashboardView {
+        let config = self.config.read().await;
+        let source = DashboardSourceKey::from_config(&config);
+        let snapshot = self.snapshot.read().await;
+        let matched = snapshot.as_ref().filter(|c| {
+            c.source_key == source
+                && c.source_generation == self.source_generation.load(Ordering::SeqCst)
+        });
+        DashboardView {
+            dashboard: matched.and_then(|c| c.dashboard.clone()),
+            refresh: if matched.is_some() {
+                self.refresh_status.read().await.clone()
+            } else {
+                RefreshStatus::default()
+            },
+            revision: *self.changes.borrow(),
+        }
+    }
+
+    /// Schedule at most one cycle and return without waiting for any provider.
+    pub async fn request_refresh(self: &Arc<Self>, force: bool, max_age: u64) {
+        let Ok(guard) = self.refresh_lock.clone().try_lock_owned() else {
+            return;
+        };
+        let source = self.current_source_key().await;
+        let generation = self.source_generation.load(Ordering::SeqCst);
+        if !force
+            && self.snapshot.read().await.as_ref().is_some_and(|c| {
+                c.source_key == source
+                    && c.source_generation == generation
+                    && Self::is_fresh(c, max_age)
+            })
+        {
+            return;
+        }
+        let state = self.clone();
+        tokio::spawn(async move {
+            let _guard = guard;
+            if let Err(error) = state.refresh_usage_from_source(source, generation).await {
+                warn!(%error, "Independent refresh did not complete");
+            }
+        });
+    }
+
     async fn refresh_usage_from_source(
         self: &Arc<Self>,
-        source: DashboardSourceKey,
-        expected_generation: u64,
+        mut source: DashboardSourceKey,
+        mut expected_generation: u64,
     ) -> anyhow::Result<Option<CodexDashboardSnapshot>> {
-        let mut source = source;
-        let mut expected_generation = expected_generation;
-
         for _attempt in 0..2 {
-            let previous_dashboard = {
-                let snapshot = self.snapshot.read().await;
-                snapshot.as_ref().and_then(|cached| {
-                    (cached.source_key == source && cached.source_generation == expected_generation)
-                        .then(|| cached.dashboard.clone())
-                        .flatten()
-                })
-            };
-            let provider = CodexDashboardProvider::new(&source.codex_root, &source.cache_dir);
             let now = Utc::now();
-            let snapshot = match provider.load_dashboard_snapshot(now).await? {
-                Some(dashboard) => {
-                    let quota = read_installed_codex_quota()
-                        .await
-                        .unwrap_or_else(|_| CodexAppServerQuotaSnapshot::unavailable());
-                    Some(retain_last_verified_quota(
-                        previous_dashboard.as_ref(),
-                        apply_official_quota(dashboard, quota),
-                    ))
+            {
+                let config = self.config.read().await;
+                if DashboardSourceKey::from_config(&config) != source
+                    || self.source_generation.load(Ordering::SeqCst) != expected_generation
+                {
+                    source = DashboardSourceKey::from_config(&config);
+                    expected_generation = self.source_generation.load(Ordering::SeqCst);
                 }
-                None => None,
-            };
-
-            #[cfg(test)]
-            self.refresh_call_count.fetch_add(1, Ordering::SeqCst);
-
+                let mut snapshot = self.snapshot.write().await;
+                if !snapshot.as_ref().is_some_and(|c| {
+                    c.source_key == source && c.source_generation == expected_generation
+                }) {
+                    *snapshot = Some(CachedSnapshot {
+                        dashboard: Some(empty_dashboard(now)),
+                        refreshed_at: DateTime::<Utc>::UNIX_EPOCH,
+                        source_key: source.clone(),
+                        source_generation: expected_generation,
+                    });
+                    *self.refresh_status.write().await = RefreshStatus::default();
+                }
+                let mut status = self.refresh_status.write().await;
+                status.quota.phase = RefreshPhase::Loading;
+                status.tasks.phase = RefreshPhase::Loading;
+                status.history.phase = RefreshPhase::Loading;
+                self.notify();
+            }
+            let mut jobs = tokio::task::JoinSet::new();
+            let state = self.clone();
+            let history_source = source.clone();
+            jobs.spawn(async move {
+                if state.before_branch("history").await {
+                    return BranchResult::History(Err(
+                        codexu_core::readers::HistoryReadError::Unavailable.into(),
+                    ));
+                }
+                let result = CodexDashboardProvider::new(
+                    &history_source.codex_root,
+                    &history_source.cache_dir,
+                )
+                .load_history_snapshot(now)
+                .await;
+                let next = match result {
+                    Ok(next) => next,
+                    Err(error) => return BranchResult::History(Err(error)),
+                };
+                // Persistence belongs to this branch, never to the shared snapshot lock.
+                // A read guard keeps source changes from racing an old summary publication.
+                let config = state.config.read().await;
+                if DashboardSourceKey::from_config(&config) != history_source
+                    || state.source_generation.load(Ordering::SeqCst) != expected_generation
+                {
+                    return BranchResult::History(Err(
+                        codexu_core::readers::HistoryReadError::SourceChanged.into(),
+                    ));
+                }
+                let summary_write_failed = if state.before_branch("summary").await {
+                    true
+                } else if let Some(dashboard) = next.as_ref() {
+                    crate::history_summary::save(
+                        &state.app_data_dir,
+                        &history_source.codex_root,
+                        &history_source.cache_dir,
+                        dashboard,
+                    )
+                    .await
+                    .is_err()
+                } else {
+                    crate::history_summary::clear(&state.app_data_dir).is_err()
+                };
+                BranchResult::History(Ok((next, summary_write_failed)))
+            });
+            let state = self.clone();
+            let task_root = source.codex_root.clone();
+            jobs.spawn(async move {
+                if state.before_branch("tasks").await {
+                    return BranchResult::Tasks(Err(anyhow::anyhow!("Task source unavailable")));
+                }
+                BranchResult::Tasks(CodexTaskBoardReader::new(task_root).load(now).await)
+            });
+            let state = self.clone();
+            jobs.spawn(async move {
+                if state.before_branch("quota").await {
+                    return BranchResult::Quota(CodexAppServerQuotaSnapshot::unavailable());
+                }
+                BranchResult::Quota(state.read_quota().await)
+            });
+            let mut changes = self.subscribe_changes();
+            let mut history_error = None;
+            while !jobs.is_empty() {
+                let joined = tokio::select! {
+                    result = jobs.join_next() => result,
+                    _ = changes.changed() => {
+                        if self.source_generation.load(Ordering::SeqCst) != expected_generation { break; }
+                        continue;
+                    }
+                };
+                let Some(joined) = joined else {
+                    break;
+                };
+                let result = match joined {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let mut status = self.refresh_status.write().await;
+                        let RefreshStatus {
+                            quota,
+                            tasks,
+                            history,
+                            ..
+                        } = &mut *status;
+                        for branch in [quota, tasks, history] {
+                            if branch.phase == RefreshPhase::Loading {
+                                branch.phase = RefreshPhase::Failed;
+                            }
+                        }
+                        self.notify();
+                        return Err(error.into());
+                    }
+                };
+                let config = self.config.read().await;
+                if DashboardSourceKey::from_config(&config) != source
+                    || self.source_generation.load(Ordering::SeqCst) != expected_generation
+                {
+                    break;
+                }
+                let mut guard = self.snapshot.write().await;
+                let cached = guard.as_mut().expect("refresh initialized snapshot");
+                let dashboard = cached.dashboard.get_or_insert_with(|| empty_dashboard(now));
+                let mut status = self.refresh_status.write().await;
+                match result {
+                    BranchResult::History(result) => match result {
+                        Ok((next, summary_write_failed)) => {
+                            dashboard.messages = next
+                                .as_ref()
+                                .map(|d| d.messages.clone())
+                                .unwrap_or_default();
+                            dashboard.codex.snapshot.local =
+                                next.as_ref().and_then(|d| d.codex.snapshot.local.clone());
+                            dashboard.leadership = next
+                                .as_ref()
+                                .map(|d| d.leadership.clone())
+                                .unwrap_or_else(|| empty_dashboard(now).leadership);
+                            dashboard.refreshed_at = now;
+                            dashboard.codex.snapshot.refreshed_at = now;
+                            status.history = BranchState {
+                                phase: RefreshPhase::Current,
+                                has_data: dashboard.codex.snapshot.local.is_some(),
+                                restored: false,
+                                updated_at: Some(now.timestamp_millis()),
+                            };
+                            status.summary_write_failed = summary_write_failed;
+                        }
+                        Err(error) => {
+                            dashboard
+                                .messages
+                                .retain(|m| !m.starts_with("Local history "));
+                            if dashboard.codex.snapshot.local.is_some() {
+                                dashboard
+                                    .messages
+                                    .push(codexu_core::readers::RETAINED_HISTORY_MESSAGE.into());
+                            }
+                            if error.is::<codexu_core::readers::HistoryReadError>() {
+                                dashboard.messages.push(error.to_string());
+                            }
+                            status.history.phase = RefreshPhase::Failed;
+                            history_error = Some(error);
+                        }
+                    },
+                    BranchResult::Quota(quota) => {
+                        let succeeded = quota.quota_read_succeeded;
+                        let mut previous = empty_dashboard(now);
+                        previous.codex.snapshot.account = dashboard.codex.snapshot.account.clone();
+                        previous.codex.snapshot.limit_id =
+                            dashboard.codex.snapshot.limit_id.clone();
+                        previous.codex.snapshot.limit_name =
+                            dashboard.codex.snapshot.limit_name.clone();
+                        previous.codex.snapshot.five_hour_quota =
+                            dashboard.codex.snapshot.five_hour_quota.clone();
+                        previous.codex.snapshot.seven_day_quota =
+                            dashboard.codex.snapshot.seven_day_quota.clone();
+                        previous.codex.snapshot.monthly_quota =
+                            dashboard.codex.snapshot.monthly_quota.clone();
+                        let current = std::mem::replace(dashboard, empty_dashboard(now));
+                        *dashboard = retain_last_verified_quota(
+                            Some(&previous),
+                            apply_official_quota(current, quota),
+                        );
+                        status.quota.phase = if succeeded {
+                            RefreshPhase::Current
+                        } else {
+                            RefreshPhase::Failed
+                        };
+                        status.quota.has_data = dashboard.codex.snapshot.five_hour_quota.is_some()
+                            || dashboard.codex.snapshot.seven_day_quota.is_some()
+                            || dashboard.codex.snapshot.monthly_quota.is_some();
+                        if succeeded {
+                            status.quota.updated_at = Some(Utc::now().timestamp_millis());
+                        }
+                    }
+                    BranchResult::Tasks(result) => match result {
+                        Ok(board) => {
+                            dashboard.codex.snapshot.task_board = board;
+                            status.tasks = BranchState {
+                                phase: RefreshPhase::Current,
+                                has_data: dashboard.codex.snapshot.task_board.is_some(),
+                                restored: false,
+                                updated_at: Some(Utc::now().timestamp_millis()),
+                            };
+                        }
+                        Err(_) => {
+                            status.tasks.phase = RefreshPhase::Failed;
+                        }
+                    },
+                }
+                self.notify();
+            }
+            jobs.abort_all();
             #[cfg(test)]
             {
-                let hook = self.refresh_attempt_hook.lock().await.clone();
-                if let Some(hook) = hook {
+                self.refresh_call_count.fetch_add(1, Ordering::SeqCst);
+                if let Some(hook) = self.refresh_attempt_hook.lock().await.clone() {
                     hook(self.clone(), _attempt);
                 }
             }
-
-            let cache = Some(CachedSnapshot {
-                dashboard: snapshot.clone(),
-                refreshed_at: now,
-                source_key: source.clone(),
-                source_generation: expected_generation,
-            });
+            let config = self.config.read().await;
+            if DashboardSourceKey::from_config(&config) == source
+                && self.source_generation.load(Ordering::SeqCst) == expected_generation
             {
                 let mut guard = self.snapshot.write().await;
-                let config = self.config.read().await;
-                if DashboardSourceKey::from_config(&config) == source
-                    && self.source_generation.load(Ordering::SeqCst) == expected_generation
-                {
-                    *guard = cache;
-                    if snapshot.is_some() {
-                        info!("Usage snapshot refreshed");
-                    } else {
-                        warn!("No Codex usage data found");
+                let cached = guard.as_mut().unwrap();
+                cached.refreshed_at = now;
+                let dashboard = cached
+                    .dashboard
+                    .as_ref()
+                    .filter(|d| {
+                        d.codex.snapshot.local.is_some()
+                            || d.codex.snapshot.task_board.is_some()
+                            || d.codex.snapshot.quota_read_succeeded
+                    })
+                    .cloned();
+                if dashboard.is_none() {
+                    if let Some(error) = history_error {
+                        return Err(error);
                     }
-                    return Ok(snapshot);
                 }
+                if dashboard.is_none() {
+                    cached.dashboard = None;
+                }
+                return Ok(dashboard);
             }
-
-            if self.source_generation.load(Ordering::SeqCst) != expected_generation {
-                warn!(
-                    "Config source changed while refreshing dashboard snapshot; retrying with latest config"
-                );
-            } else {
-                warn!("Could not refresh dashboard snapshot with stable source; retrying");
-            }
-
-            let latest_source = {
-                let config = self.config.read().await;
-                DashboardSourceKey::from_config(&config)
-            };
-            let latest_generation = self.source_generation.load(Ordering::SeqCst);
-            source = latest_source;
-            expected_generation = latest_generation;
+            source = DashboardSourceKey::from_config(&config);
+            expected_generation = self.source_generation.load(Ordering::SeqCst);
         }
-
-        warn!("Could not refresh usage snapshot with stable source config");
         anyhow::bail!(
             "Failed to refresh dashboard snapshot due to concurrent config source changes"
-        );
+        )
+    }
+
+    async fn before_branch(&self, _branch: &str) -> bool {
+        #[cfg(test)]
+        {
+            let controls = self.branch_controls.read().await;
+            let (delay, fail) = controls.get(_branch).copied().unwrap_or((0, false));
+            drop(controls);
+            let gate = self.branch_gates.read().await.get(_branch).cloned();
+            if let Some(gate) = gate {
+                // A test releases the branch after observing sibling publication.
+                gate.acquire()
+                    .await
+                    .expect("test branch gate closed")
+                    .forget();
+            }
+            if delay > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
+            return fail;
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    }
+
+    async fn read_quota(&self) -> CodexAppServerQuotaSnapshot {
+        #[cfg(not(test))]
+        {
+            read_installed_codex_quota()
+                .await
+                .unwrap_or_else(|_| CodexAppServerQuotaSnapshot::unavailable())
+        }
+        #[cfg(test)]
+        {
+            self.test_quota
+                .read()
+                .await
+                .clone()
+                .unwrap_or_else(CodexAppServerQuotaSnapshot::unavailable)
+        }
     }
 
     /// Update config and persist to disk.
@@ -350,40 +697,63 @@ impl AppState {
     {
         let mut config = self.config.write().await;
         let previous_source = DashboardSourceKey::from_config(&config);
-        f(&mut config);
-        let current_source = DashboardSourceKey::from_config(&config);
+        let mut cloned = config.clone();
+        f(&mut cloned);
+        let current_source = DashboardSourceKey::from_config(&cloned);
+        if current_source != previous_source {
+            crate::history_summary::clear(&self.app_data_dir)?;
+        }
+        cloned.save(&self.app_data_dir)?;
+        *config = cloned.clone();
         if current_source != previous_source {
             self.source_generation.fetch_add(1, Ordering::SeqCst);
+            self.notify();
         }
-        let cloned = config.clone();
         drop(config);
-        cloned.save(&self.app_data_dir)?;
         Ok(cloned)
     }
 }
 
 /// Clears the codexU file cache for the configured cache directory.
-pub async fn clear_cache(state: &Arc<AppState>) {
+pub async fn clear_cache(state: &Arc<AppState>) -> anyhow::Result<()> {
+    let _guard = state.refresh_lock.lock().await;
     let cache_dir = {
         let config = state.config.read().await;
         config.cache_dir.clone()
     };
-    let codex_cache = cache_dir.join("codex").join("session-usage-v1.json");
+    let index_cache = cache_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        codexu_core::readers::codex_history_index::clear(&index_cache)
+    })
+    .await??;
     let claude_cache = cache_dir.join("claude-code").join("session-usage-v1.json");
-    for path in [codex_cache, claude_cache] {
+    for path in [claude_cache] {
         if let Err(e) = tokio::fs::remove_file(&path).await {
             if e.kind() != std::io::ErrorKind::NotFound {
                 error!("Failed to remove cache file {}: {}", path.display(), e);
+                return Err(codexu_core::readers::HistoryReadError::CacheUnavailable.into());
             }
         }
     }
+    crate::history_summary::clear(&state.app_data_dir)?;
     {
         let mut guard = state.snapshot.write().await;
         *guard = None;
     }
+    *state.refresh_status.write().await = RefreshStatus::default();
     state.source_generation.fetch_add(1, Ordering::SeqCst);
+    state.notify();
     info!("Cleared codexU cache");
+    Ok(())
 }
+
+#[cfg(test)]
+#[path = "refresh_tests.rs"]
+mod refresh_tests;
+
+#[cfg(test)]
+#[path = "refresh_harness.rs"]
+mod refresh_harness;
 
 #[cfg(test)]
 mod tests {
@@ -483,6 +853,231 @@ mod tests {
         }
     }
 
+    async fn state_with_complete_history(root: &Path) -> (Arc<AppState>, PathBuf) {
+        let data = root.join("data");
+        let cache = root.join("cache");
+        std::fs::create_dir_all(data.join("sessions")).unwrap();
+        let file = data.join("sessions/rollout-history.jsonl");
+        write_history_fixture(&file, 300);
+        let mut dashboard = CodexDashboardProvider::new(&data, &cache)
+            .load_dashboard_snapshot(Utc::now())
+            .await
+            .unwrap()
+            .unwrap();
+        // A recognizable previously published value tests retention, not scoring.
+        dashboard.leadership.score = Some(67);
+        let state = Arc::new(AppState::new(root.join("settings")));
+        {
+            let mut config = state.config.write().await;
+            config.codex_root = data;
+            config.cache_dir = cache;
+        }
+        *state.snapshot.write().await = Some(CachedSnapshot {
+            dashboard: Some(dashboard),
+            refreshed_at: Utc::now(),
+            source_key: state.current_source_key().await,
+            source_generation: 0,
+        });
+        (state, file)
+    }
+
+    pub(super) fn write_history_fixture(file: &Path, tokens: i64) {
+        let event = serde_json::json!({
+            "timestamp": Utc::now().to_rfc3339(), "type": "event_msg",
+            "payload": {"type": "token_count", "turn_id": "fixture-turn",
+                "info": {"last_token_usage": {"input_tokens": tokens,
+                    "cached_input_tokens": 0, "output_tokens": 0,
+                    "reasoning_output_tokens": 0, "total_tokens": tokens}}}
+        });
+        std::fs::write(file, format!("{event}\n")).unwrap();
+    }
+
+    #[tokio::test]
+    async fn incomplete_history_retains_complete_values_and_recovers_to_legal_lower_total() {
+        let temp = tempfile::tempdir().unwrap();
+        let (state, file) = state_with_complete_history(temp.path()).await;
+        let prior = state
+            .snapshot
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .dashboard
+            .clone()
+            .unwrap();
+        write_history_fixture(&file, 100);
+        use std::io::Write;
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&file)
+                .unwrap(),
+            "{{broken"
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let retained = state.refresh_usage().await.unwrap().unwrap();
+            assert_eq!(retained.codex.snapshot.local, prior.codex.snapshot.local);
+            assert_eq!(retained.leadership, prior.leadership);
+            assert_eq!(retained.refreshed_at, prior.refreshed_at);
+            assert_eq!(
+                retained
+                    .messages
+                    .iter()
+                    .filter(|m| m.as_str() == codexu_core::readers::RETAINED_HISTORY_MESSAGE)
+                    .count(),
+                1
+            );
+        }
+        write_history_fixture(&file, 50);
+        let recovered = state.refresh_usage().await.unwrap().unwrap();
+        assert_eq!(
+            recovered
+                .codex
+                .snapshot
+                .local
+                .as_ref()
+                .unwrap()
+                .lifetime_tokens,
+            50
+        );
+        assert!(!recovered
+            .messages
+            .iter()
+            .any(|m| m == codexu_core::readers::RETAINED_HISTORY_MESSAGE));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn locked_history_preserves_dashboard_and_unlock_recovers_same_fingerprint() {
+        use std::io::Write;
+        use std::os::windows::fs::OpenOptionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let (state, file) = state_with_complete_history(temp.path()).await;
+        writeln!(std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap())
+        .unwrap();
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&file)
+            .unwrap();
+        let retained = state.refresh_usage().await.unwrap().unwrap();
+        assert_eq!(
+            retained
+                .codex
+                .snapshot
+                .local
+                .as_ref()
+                .unwrap()
+                .lifetime_tokens,
+            300
+        );
+        assert_eq!(retained.leadership.score, Some(67));
+        assert!(retained
+            .messages
+            .iter()
+            .any(|m| m == codexu_core::readers::RETAINED_HISTORY_MESSAGE));
+        drop(locked);
+        let recovered = state.refresh_usage().await.unwrap().unwrap();
+        assert_eq!(
+            recovered
+                .codex
+                .snapshot
+                .local
+                .as_ref()
+                .unwrap()
+                .lifetime_tokens,
+            300
+        );
+        assert!(!recovered
+            .messages
+            .iter()
+            .any(|m| m == codexu_core::readers::RETAINED_HISTORY_MESSAGE));
+    }
+
+    #[tokio::test]
+    async fn unavailable_source_is_retained_but_confirmed_empty_source_is_published() {
+        let temp = tempfile::tempdir().unwrap();
+        let (state, file) = state_with_complete_history(temp.path()).await;
+        let data = temp.path().join("data");
+        let moved = temp.path().join("temporarily-unavailable");
+        std::fs::rename(&data, &moved).unwrap();
+        assert_eq!(
+            state
+                .refresh_usage()
+                .await
+                .unwrap()
+                .unwrap()
+                .codex
+                .snapshot
+                .local
+                .as_ref()
+                .unwrap()
+                .lifetime_tokens,
+            300
+        );
+        std::fs::rename(&moved, &data).unwrap();
+        std::fs::remove_file(file).unwrap();
+        assert!(state.refresh_usage().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn failure_after_source_switch_or_cache_clear_cannot_resurrect_old_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let (state, file) = state_with_complete_history(temp.path()).await;
+        state
+            .update_config(|config| {
+                config.codex_root = temp.path().join("unavailable-other-source")
+            })
+            .await
+            .unwrap();
+        assert!(state.get_usage(600).await.is_err());
+        state
+            .update_config(|config| config.codex_root = temp.path().join("data"))
+            .await
+            .unwrap();
+        std::fs::write(&file, b"{broken\n").unwrap();
+        assert!(state.refresh_usage().await.is_err());
+        clear_cache(&state).await.unwrap();
+        assert!(state.snapshot.read().await.is_none());
+        assert!(state.refresh_usage().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn index_failure_exposes_current_cause_without_accumulating_obsolete_causes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (state, file) = state_with_complete_history(temp.path()).await;
+        let lock_path =
+            codexu_core::readers::codex_history_index::database_path(&temp.path().join("cache"))
+                .with_extension("lock");
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+        lock.try_lock().unwrap();
+        let busy = state.refresh_usage().await.unwrap().unwrap();
+        assert_eq!(
+            busy.codex.snapshot.local.as_ref().unwrap().lifetime_tokens,
+            300
+        );
+        assert!(busy.messages.iter().any(|m| m.contains("index is in use")));
+        drop(lock);
+        std::fs::write(&file, b"{broken\n").unwrap();
+        let invalid = state.refresh_usage().await.unwrap().unwrap();
+        assert!(invalid
+            .messages
+            .iter()
+            .any(|m| m.contains("invalid record")));
+        assert!(!invalid
+            .messages
+            .iter()
+            .any(|m| m.contains("index is in use")));
+    }
+
     #[tokio::test]
     async fn get_usage_uses_cached_snapshot_before_ttl() {
         let app_data_dir = unique_temp_path("codexu-tauri-cache-test");
@@ -541,6 +1136,7 @@ mod tests {
         let state = Arc::new(AppState::new(app_data_dir));
         let codex_root = unique_temp_path("codexu-tauri-codex-root-none");
         let cache_dir = unique_temp_path("codexu-tauri-cache-root-none");
+        std::fs::create_dir_all(&codex_root).unwrap();
         std::fs::create_dir_all(&cache_dir).unwrap();
         {
             let mut config = state.config.write().await;
@@ -702,6 +1298,11 @@ mod tests {
     async fn refresh_usage_returns_error_after_retry_exhaustion_with_generation_toggles() {
         let app_data_dir = unique_temp_path("codexu-tauri-retry-exhaustion");
         let state = Arc::new(AppState::new(app_data_dir));
+        {
+            let mut config = state.config.write().await;
+            config.codex_root = unique_temp_path("codexu-tauri-retry-exhaustion-root");
+            std::fs::create_dir_all(&config.codex_root).unwrap();
+        }
         {
             let mut hook = state.refresh_attempt_hook.lock().await;
             *hook = Some(std::sync::Arc::new(|state, _attempt| {

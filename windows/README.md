@@ -23,6 +23,70 @@ Playwright viewport `1440×900`。画面只展示聚合指标和领导力界面�
 - 标题优先使用 `title`，为空时回退到 `preview`，展示前归一化并截断到 48 个字符
 - 工作区只展示路径尾名，automation 优先使用配置中的 `name`
 
+### 历史读取与完整结果
+
+历史文件或目录暂时不可读、日志记录不完整，或来源在读取期间发生变化时，本轮读取不会作为
+完整历史发布，也不会把失败产生的空摘要写进有效缓存。应用保留同一数据来源的上次完整累计、
+明细和 AI Leadership，并提示刷新重试；解锁后无需再次修改日志即可重新读取。
+
+首次读取失败时历史标为暂不可用，额度和任务仍可独立更新；可确认的空来源仍显示暂无数据。切换数据来源或主动清缓存后，
+不恢复前一个来源的历史。成功完整重读可以更新为较小的累计值。历史事实和每日归档在 SQLite
+事务中提交，完整发布点不会因失败提前推进；推理缓存仍以临时文件写完后原子替换。
+这些缓存是可重建的派生数据，不修改原始日志。
+
+退出重开先恢复同来源的有界首页摘要，并明确显示旧值状态；完整历史完成后替换摘要与明细。
+仍保留既有的 state SQLite 不可用时 JSONL-only 口径与来源提示。
+
+### 启动摘要与独立刷新
+
+官方额度、任务元数据和完整历史分别读取，完成一项就发布该项。额度慢或失败不会阻止任务与
+历史更新，历史慢或失败也不会阻止其他两项。首页为每项显示等待、读取、更新或失败状态；
+有同来源完整旧值时继续显示旧值，没有数据时显示不可用或暂无记录，不伪造 0。
+
+`history-summary.json` 位于 app data，读取上限 256 KiB，只保存固定的用量摘要与领导力汇总，
+不保存官方额度、任务正文、线程标题、项目路径、prompt、回复或工具参数。摘要是旧值，不作为
+有效新读取；明细、排行、趋势和推理等待完整历史。来源根、缓存根或统计时区不匹配时不恢复，
+切换来源和清缓存会使摘要失效。写入失败单独提示，不把完整的内存结果丢掉。
+
+三个分支共用一次刷新周期，每项更新保留其他项已有值；重复点击不会启动重叠周期。来源世代
+变化后旧请求不再发布，前端按递增修订号拒绝迟到的旧响应。事件订阅完成后读取首次状态，
+后续事件只取当前状态，不触发刷新循环；周期查询由 backend 的配置 TTL 限制实际采样。
+
+隔离验收页面位于 `web/tests/refresh-harness.html`，需要显式启动 ignored Rust
+`live_refresh_harness` 及对应 loopback Vite 服务。它运行真实 AppState 和历史/任务读取器，
+仅替换 IPC 传输并注入模拟额度、延迟与故障；测试不会访问真实账户或启动原生窗口。
+
+### 增量历史与每日归档
+
+Windows 使用 `codex/history-index.sqlite` 保存安全派生事实、逐来源检查点和按统计时区生成的
+每日归档。没有变化的日志不重新解析；追加从已提交的完整行检查点续读，未结束的尾行保留为
+待补全状态。文件截断、同大小改写或原子替换会重建该来源。检查点分批提交，程序中断后可续接，
+只有本轮清单全部读完并通过来源核验才更新完整发布点。
+
+增量路径使用文件身份、大小/mtime，以及有界的文件头和检查点边界摘要；不会在每次追加时
+扫描全部旧字节。任意内部改写与追加同时发生时，使用明确的完整性扫描核验原始日志：
+
+```powershell
+.\target\release\codexu-probe.exe --verify-history-index --codex-root "<data-root>" --cache-dir "<cache-root>" --summary
+```
+
+原有整包 JSON 摘要缓存路径已退出，SQLite 索引可从原始日志重建。计数器区分累计与增量，
+支持同一 turn 多次调用，cached input 属于 input 子集；相同逻辑会话的 live/archive 复制与明确
+fork 的公共 token 前缀不重复计费。普通 runtime spawn 父子关系不视作复制历史。每日、月度、
+趋势和归档使用相同统计时区，包括 DST 日界。
+
+资源边界：主库页上限 256 MiB，受管理的索引及旁文件预算 1 GiB，事实物化上限 500,000 条，
+每来源未完成任务上限 1,024 个。超限、索引占用或写入失败明确返回状态并保留同来源的完整值；
+不会清理原始日志。每日旧归档以每批最多 256 行回收，保留当前和上一完整发布版本；SQLite
+读事务仍在使用的快照会阻止删除提交。索引页可重用，不为每次回收做整库压缩。
+
+```powershell
+# 定向回归
+cargo test -p codexu-core --test incremental_history
+# 显式的 500 来源 / 50,000 事件 Release 探针（默认 suite 不自动运行）
+cargo test --release -p codexu-core --test incremental_history_scale -- --ignored --nocapture --test-threads=1
+```
+
 ## 安装（推荐）
 
 Windows 用户可以直接打开[最新 GitHub Release](https://github.com/shanggqm/codexU/releases/latest)，在
@@ -42,13 +106,15 @@ Windows 工作区使用 Node.js 22.12 或更新版本和 MSVC ABI。首次在当
 安装并设置项目级 toolchain override：
 
 ```powershell
-rustup toolchain install 1.97.1-x86_64-pc-windows-msvc --profile minimal --component rustfmt
-rustup override set 1.97.1-x86_64-pc-windows-msvc
+rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt
+rustup override set stable-x86_64-pc-windows-msvc
 ```
 
 该 override 只作用于当前 `windows/` 目录，不修改全局默认 toolchain。仓库不提交
 `rust-toolchain.toml`，因为只写版本号时，rustup 会沿用用户的 default host，在配置为
 GNU 的 Windows 环境中意外选择 GNU ABI，并额外要求系统提供 `dlltool.exe`。
+
+Windows release 构建会先更新 stable MSVC toolchain，再执行格式检查、测试和打包。
 
 ```powershell
 cd windows
