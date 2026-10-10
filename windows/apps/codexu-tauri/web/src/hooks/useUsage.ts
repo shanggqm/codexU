@@ -1,72 +1,53 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { CodexDashboardSnapshot } from '../types/models';
-import {
-  isTauriRuntimeAvailable,
-  requireTauriRuntime,
-} from '../utils/tauri';
+import type { CodexDashboardSnapshot, DashboardView } from '../types/models';
+import { isTauriRuntimeAvailable, requireTauriRuntime } from '../utils/tauri';
 import { getVisualTestData } from '../types/visualTest';
 
 export function useUsage() {
   const [dashboard, setDashboard] = useState<CodexDashboardSnapshot | null | undefined>(undefined);
-  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<DashboardView['refresh'] | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async (force = false) => {
-    setLoading(true);
-    setError(null);
+  const revision = useRef(-1);
+  const mounted = useRef(false);
+  const load = useCallback(async (command = 'get_local_usage') => {
     try {
       requireTauriRuntime();
-      const result = await invoke<CodexDashboardSnapshot | null>(
-        force ? 'refresh_usage' : 'get_local_usage'
-      );
-      setDashboard(result);
+      const view = await invoke<DashboardView>(command);
+      if (!mounted.current || view.revision < revision.current) return;
+      revision.current = view.revision;
+      setDashboard(view.dashboard); setStatus(view.refresh);
+      setLoading([view.refresh.quota, view.refresh.tasks, view.refresh.history].some(s => s.phase === 'loading'));
+      setError(null);
     } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
+      if (mounted.current) { setError(String(e)); setLoading(false); }
     }
   }, []);
-
-useEffect(() => {
-  const visualDashboard = getVisualTestData()?.dashboard;
-  if (visualDashboard) {
-    setDashboard(visualDashboard);
-    setLoading(false);
-    return;
-  }
-
-  load();
-
-  if (!isTauriRuntimeAvailable()) {
-    return;
-  }
-
-  let unlisten: (() => void) | null = null;
-  let cancelled = false;
-
-  const subscribe = async () => {
-    try {
-      const unlistenFn = await listen('usage:updated', () => {
-        load();
-      });
-      if (cancelled) {
-        unlistenFn();
-      } else {
-        unlisten = unlistenFn;
-      }
-    } catch (e) {
-      setError(String(e));
+  useEffect(() => {
+    mounted.current = true;
+    const visualDashboard = getVisualTestData()?.dashboard;
+    if (visualDashboard) {
+      setDashboard(visualDashboard); setLoading(false);
+      return () => { mounted.current = false; };
     }
-  };
-  subscribe();
-
-  return () => {
-    cancelled = true;
-    unlisten?.();
-  };
-}, [load]);
-
-  return { dashboard, loading, error, refresh: () => load(true) };
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    const subscribe = async () => {
+      if (isTauriRuntimeAvailable()) {
+        try {
+          const dispose = await listen('usage:updated', () => { void load('get_usage_state'); });
+          if (cancelled) { dispose(); return; }
+          unlisten = dispose;
+        } catch (e) { if (!cancelled) setError(String(e)); }
+      }
+      if (!cancelled) await load();
+    };
+    void subscribe();
+    // Backend owns the configured TTL; this read never forces an extra cycle.
+    const interval = window.setInterval(() => { void load(); }, 10_000);
+    return () => { cancelled = true; mounted.current = false; unlisten?.(); window.clearInterval(interval); };
+  }, [load]);
+  return { dashboard, status, loading, error, refresh: () => load('refresh_usage') };
 }

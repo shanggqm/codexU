@@ -111,6 +111,9 @@ pub async fn set_settings(
         apply_language(&app, language);
     }
     let _ = app.emit("settings:changed", config.clone());
+    state
+        .request_refresh(false, config.refresh_interval_secs)
+        .await;
     Ok(config)
 }
 

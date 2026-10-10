@@ -109,6 +109,23 @@ impl CodexDashboardProvider {
         &self,
         now: DateTime<Utc>,
     ) -> anyhow::Result<Option<CodexDashboardSnapshot>> {
+        let mut dashboard = self.load_history_snapshot(now).await?;
+        if let Some(dashboard) = dashboard.as_mut() {
+            match CodexTaskBoardReader::new(&self.codex_root).load(now).await {
+                Ok(board) => dashboard.codex.snapshot.task_board = board,
+                Err(_) => dashboard
+                    .messages
+                    .push("Local task metadata is temporarily unavailable.".into()),
+            }
+        }
+        Ok(dashboard)
+    }
+
+    /// Complete history only; task metadata and official quota have independent lifetimes.
+    pub async fn load_history_snapshot(
+        &self,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<Option<CodexDashboardSnapshot>> {
         let (state_metadata, messages) = self.load_state_metadata().await?;
 
         let rollout_index = index_codex_rollout_files(&self.codex_root).await?;
@@ -123,11 +140,6 @@ impl CodexDashboardProvider {
         let leadership_snapshot = build_leadership_snapshot(&summaries, now);
         let leadership_signal = build_codex_leadership_signal(&leadership_snapshot);
 
-        let task_board = CodexTaskBoardReader::new(&self.codex_root)
-            .load(now)
-            .await
-            .unwrap_or(None);
-
         if let Some(local) = local_usage.as_mut() {
             local.inference_performance = InferencePerformanceReader::new(&self.cache_dir)
                 .load_from_index(&rollout_index, now)
@@ -137,7 +149,7 @@ impl CodexDashboardProvider {
         ensure_history_unchanged(&rollout_index).await?;
 
         Ok(Some(CodexDashboardSnapshot {
-            codex: build_codex_runtime_snapshot(local_usage, task_board, now),
+            codex: build_codex_runtime_snapshot(local_usage, None, now),
             leadership: leadership_signal,
             refreshed_at: now,
             messages,
@@ -166,6 +178,22 @@ impl CodexDashboardProvider {
                 Ok((HashMap::new(), vec![METADATA_WARNING.to_string()]))
             }
         }
+    }
+}
+
+pub fn empty_dashboard(now: DateTime<Utc>) -> CodexDashboardSnapshot {
+    CodexDashboardSnapshot {
+        codex: build_codex_runtime_snapshot(None, None, now),
+        leadership: CodexLeadershipSignal {
+            score: None,
+            evidence_coverage: 0.0,
+            active_day_count: 0,
+            period: LEADERSHIP_PERIOD_DEFAULT.into(),
+            model_version: DEFAULT_LEADERSHIP_MODEL_VERSION.into(),
+            report: None,
+        },
+        refreshed_at: now,
+        messages: vec![],
     }
 }
 
