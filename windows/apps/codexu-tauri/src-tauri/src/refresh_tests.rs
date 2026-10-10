@@ -52,6 +52,21 @@ async fn wait_for(
 async fn restart_shows_bounded_summary_before_history_and_preserves_independent_updates() {
     let (_temp, state) = fixture().await;
     state.refresh_usage().await.unwrap();
+    {
+        let mut cached = state.snapshot.write().await;
+        let d = cached.as_mut().unwrap().dashboard.as_mut().unwrap();
+        d.leadership.score = Some(67);
+        d.leadership.evidence_coverage = 0.95;
+        d.leadership.active_day_count = 14;
+        crate::history_summary::save(
+            &state.app_data_dir,
+            &state.config.read().await.codex_root,
+            &state.config.read().await.cache_dir,
+            d,
+        )
+        .await
+        .unwrap();
+    }
     let saved = std::fs::read(state.app_data_dir.join("history-summary.json")).unwrap();
     assert!(saved.len() < 256 * 1024);
     let restarted = Arc::new(AppState::new(state.app_data_dir.clone()));
@@ -74,6 +89,19 @@ async fn restart_shows_bounded_summary_before_history_and_preserves_independent_
     assert_eq!(local.lifetime_tokens, 300);
     assert!(local.recent_threads.is_empty());
     assert!(restored.refresh.history.restored);
+    assert_eq!(
+        restored.dashboard.as_ref().unwrap().leadership.score,
+        Some(67)
+    );
+    assert_eq!(
+        restored
+            .dashboard
+            .as_ref()
+            .unwrap()
+            .leadership
+            .evidence_coverage,
+        0.95
+    );
     assert!(restored
         .dashboard
         .unwrap()

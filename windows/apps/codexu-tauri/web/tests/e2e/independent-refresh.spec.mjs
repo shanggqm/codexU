@@ -24,6 +24,7 @@ test('real AppState restart, independent slow/failing branches, recovery and sou
   await expect(page.getByTestId('refresh-quota')).toContainText('Up to date');
   await expect(page.getByTestId('refresh-tasks')).toContainText('Up to date');
   await expect(page.getByRole('region', { name: 'Local token metrics' })).toContainText('300');
+  await expect(page.locator('.leadership-overview-card')).toContainText('67');
   await observe('restart-history-loading');
   await expect(page.getByTestId('refresh-history')).toContainText('Up to date', { timeout: 10_000 });
   for (const branch of ['quota', 'tasks', 'history']) {

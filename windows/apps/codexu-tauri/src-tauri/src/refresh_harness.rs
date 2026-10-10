@@ -25,6 +25,15 @@ async fn seed(base: &Path) -> Arc<AppState> {
         let mut cached = state.snapshot.write().await;
         let d = cached.as_mut().unwrap().dashboard.as_mut().unwrap();
         d.leadership.score = Some(67);
+        d.leadership.evidence_coverage = 0.95;
+        d.leadership.active_day_count = 14;
+        if let Some(report) = d.leadership.report.as_mut() {
+            for period in &mut report.reports {
+                period.score = Some(67);
+                period.evidence_coverage = 0.95;
+                period.active_day_count = 14;
+            }
+        }
         crate::history_summary::save(
             &state.app_data_dir,
             &base.join("root"),
