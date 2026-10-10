@@ -32,6 +32,11 @@ make test-palettes
 ./scripts/test-status-item.sh
 ```
 
+The macOS CI job builds once, then runs the palette, menu bar, particle
+animation, rate limit, and statistics time zone self-tests directly against
+the same app binary. Each test has its own CI step and fails the job on error.
+The local test scripts build the app before running their self-test.
+
 Run locally:
 
 ```sh
