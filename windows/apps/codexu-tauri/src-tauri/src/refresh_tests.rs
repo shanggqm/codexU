@@ -35,9 +35,17 @@ async fn wait_for(
     state: &Arc<AppState>,
     predicate: impl Fn(&DashboardView) -> bool,
 ) -> DashboardView {
-    tokio::time::timeout(std::time::Duration::from_secs(4), async {
+    let mut last_observation = String::from("no view observed");
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             let view = state.current_view().await;
+            last_observation = format!(
+                "quota={:?}, tasks={:?}, history={:?}, revision={}",
+                view.refresh.quota.phase,
+                view.refresh.tasks.phase,
+                view.refresh.history.phase,
+                view.revision
+            );
             if predicate(&view) {
                 return view;
             }
@@ -45,7 +53,17 @@ async fn wait_for(
         }
     })
     .await
-    .expect("refresh observation timed out")
+    .unwrap_or_else(|_| panic!("refresh observation timed out: {last_observation}"))
+}
+
+async fn hold_branch(state: &Arc<AppState>, branch: &str) -> Arc<tokio::sync::Semaphore> {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    state
+        .branch_gates
+        .write()
+        .await
+        .insert(branch.into(), gate.clone());
+    gate
 }
 
 #[tokio::test]
@@ -71,11 +89,7 @@ async fn restart_shows_bounded_summary_before_history_and_preserves_independent_
     assert!(saved.len() < 256 * 1024);
     let restarted = Arc::new(AppState::new(state.app_data_dir.clone()));
     *restarted.test_quota.write().await = Some(quota());
-    restarted
-        .branch_controls
-        .write()
-        .await
-        .insert("history".into(), (500, false));
+    let history_gate = hold_branch(&restarted, "history").await;
     let restored = restarted.current_view().await;
     let local = restored
         .dashboard
@@ -127,6 +141,7 @@ async fn restart_shows_bounded_summary_before_history_and_preserves_independent_
             .used_percent,
         17.0
     );
+    history_gate.add_permits(1);
     let complete = wait_for(&restarted, |v| {
         v.refresh.history.phase == RefreshPhase::Current
     })
@@ -142,7 +157,8 @@ async fn slow_summary_write_leaves_other_branches_and_current_view_readable() {
         .branch_controls
         .write()
         .await
-        .insert("summary".into(), (500, true));
+        .insert("summary".into(), (0, true));
+    let summary_gate = hold_branch(&state, "summary").await;
     state.request_refresh(true, 0).await;
     let early = wait_for(&state, |view| {
         view.refresh.quota.phase == RefreshPhase::Current
@@ -161,6 +177,7 @@ async fn slow_summary_write_leaves_other_branches_and_current_view_readable() {
             .lifetime_tokens,
         300
     );
+    summary_gate.add_permits(1);
     let complete = wait_for(&state, |view| {
         view.refresh.history.phase == RefreshPhase::Current
     })
@@ -189,7 +206,19 @@ async fn each_delayed_or_failed_branch_does_not_block_siblings_and_recovers() {
             .branch_controls
             .write()
             .await
-            .insert(branch.into(), (350, true));
+            .insert(branch.into(), (0, true));
+        let gate = hold_branch(&state, branch).await;
+        // Exercise a healthy sibling slower than the old 350 ms failure window.
+        let sibling = if branch == "history" {
+            "tasks"
+        } else {
+            "history"
+        };
+        state
+            .branch_controls
+            .write()
+            .await
+            .insert(sibling.into(), (600, false));
         state.request_refresh(true, 0).await;
         let early = wait_for(&state, |v| {
             let delayed = match branch {
@@ -215,6 +244,7 @@ async fn each_delayed_or_failed_branch_does_not_block_siblings_and_recovers() {
             _ => &early.refresh.history,
         };
         assert_eq!(delayed.phase, RefreshPhase::Loading);
+        gate.add_permits(1);
         let failed = wait_for(&state, |v| {
             [&v.refresh.quota, &v.refresh.tasks, &v.refresh.history]
                 .iter()
@@ -241,6 +271,7 @@ async fn each_delayed_or_failed_branch_does_not_block_siblings_and_recovers() {
             );
         }
         state.branch_controls.write().await.clear();
+        state.branch_gates.write().await.clear();
         state.request_refresh(true, 0).await;
         wait_for(&state, |v| {
             [&v.refresh.quota, &v.refresh.tasks, &v.refresh.history]
@@ -254,11 +285,7 @@ async fn each_delayed_or_failed_branch_does_not_block_siblings_and_recovers() {
 #[tokio::test]
 async fn cold_start_is_missing_not_zero_and_concurrent_requests_share_one_cycle() {
     let (_temp, state) = fixture().await;
-    state
-        .branch_controls
-        .write()
-        .await
-        .insert("history".into(), (200, false));
+    let history_gate = hold_branch(&state, "history").await;
     let initial = state.current_view().await;
     assert!(initial.dashboard.is_none());
     for _ in 0..20 {
@@ -266,6 +293,7 @@ async fn cold_start_is_missing_not_zero_and_concurrent_requests_share_one_cycle(
     }
     let loading = wait_for(&state, |v| v.refresh.history.phase == RefreshPhase::Loading).await;
     assert!(loading.dashboard.unwrap().codex.snapshot.local.is_none());
+    history_gate.add_permits(1);
     wait_for(&state, |v| v.refresh.history.phase == RefreshPhase::Current).await;
     let _guard = state.refresh_lock.lock().await;
     assert_eq!(state.refresh_call_count.load(Ordering::SeqCst), 1);
@@ -276,11 +304,7 @@ async fn switching_source_during_delayed_history_cancels_old_generation_and_clea
 {
     let (temp, state) = fixture().await;
     state.refresh_usage().await.unwrap();
-    state
-        .branch_controls
-        .write()
-        .await
-        .insert("history".into(), (300, false));
+    let history_gate = hold_branch(&state, "history").await;
     state.request_refresh(true, 0).await;
     wait_for(&state, |v| v.refresh.history.phase == RefreshPhase::Loading).await;
     let new_root = temp.path().join("second");
@@ -292,6 +316,8 @@ async fn switching_source_during_delayed_history_cancels_old_generation_and_clea
         .unwrap();
     assert!(state.current_view().await.dashboard.is_none());
     assert!(!state.app_data_dir.join("history-summary.json").exists());
+    state.branch_gates.write().await.clear();
+    history_gate.add_permits(1);
     let final_view = wait_for(&state, |v| v.refresh.history.phase == RefreshPhase::Current).await;
     assert_eq!(
         final_view

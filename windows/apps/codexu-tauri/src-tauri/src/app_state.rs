@@ -216,6 +216,8 @@ pub struct AppState {
     #[cfg(test)]
     branch_controls: RwLock<std::collections::HashMap<String, (u64, bool)>>,
     #[cfg(test)]
+    branch_gates: RwLock<std::collections::HashMap<String, Arc<tokio::sync::Semaphore>>>,
+    #[cfg(test)]
     test_quota: RwLock<Option<CodexAppServerQuotaSnapshot>>,
     #[cfg(test)]
     pub(crate) refresh_call_count: Arc<AtomicUsize>,
@@ -254,6 +256,8 @@ impl AppState {
             source_generation: AtomicU64::new(0),
             #[cfg(test)]
             branch_controls: RwLock::new(std::collections::HashMap::new()),
+            #[cfg(test)]
+            branch_gates: RwLock::new(std::collections::HashMap::new()),
             #[cfg(test)]
             test_quota: RwLock::new(None),
             #[cfg(test)]
@@ -650,6 +654,14 @@ impl AppState {
             let controls = self.branch_controls.read().await;
             let (delay, fail) = controls.get(_branch).copied().unwrap_or((0, false));
             drop(controls);
+            let gate = self.branch_gates.read().await.get(_branch).cloned();
+            if let Some(gate) = gate {
+                // A test releases the branch after observing sibling publication.
+                gate.acquire()
+                    .await
+                    .expect("test branch gate closed")
+                    .forget();
+            }
             if delay > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
