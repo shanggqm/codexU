@@ -135,6 +135,51 @@ async fn restart_shows_bounded_summary_before_history_and_preserves_independent_
 }
 
 #[tokio::test]
+async fn slow_summary_write_leaves_other_branches_and_current_view_readable() {
+    let (_temp, state) = fixture().await;
+    state.refresh_usage().await.unwrap();
+    state
+        .branch_controls
+        .write()
+        .await
+        .insert("summary".into(), (500, true));
+    state.request_refresh(true, 0).await;
+    let early = wait_for(&state, |view| {
+        view.refresh.quota.phase == RefreshPhase::Current
+            && view.refresh.tasks.phase == RefreshPhase::Current
+            && view.refresh.history.phase == RefreshPhase::Loading
+    })
+    .await;
+    assert_eq!(
+        early
+            .dashboard
+            .unwrap()
+            .codex
+            .snapshot
+            .local
+            .unwrap()
+            .lifetime_tokens,
+        300
+    );
+    let complete = wait_for(&state, |view| {
+        view.refresh.history.phase == RefreshPhase::Current
+    })
+    .await;
+    assert!(complete.refresh.summary_write_failed);
+    assert_eq!(
+        complete
+            .dashboard
+            .unwrap()
+            .codex
+            .snapshot
+            .local
+            .unwrap()
+            .lifetime_tokens,
+        300
+    );
+}
+
+#[tokio::test]
 async fn each_delayed_or_failed_branch_does_not_block_siblings_and_recovers() {
     for branch in ["quota", "tasks", "history"] {
         let (_temp, state) = fixture().await;

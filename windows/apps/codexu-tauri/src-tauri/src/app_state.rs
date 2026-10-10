@@ -198,7 +198,7 @@ pub struct DashboardView {
 }
 
 enum BranchResult {
-    History(anyhow::Result<Option<CodexDashboardSnapshot>>),
+    History(anyhow::Result<(Option<CodexDashboardSnapshot>, bool)>),
     Quota(CodexAppServerQuotaSnapshot),
     Tasks(anyhow::Result<Option<TaskBoard>>),
 }
@@ -422,14 +422,41 @@ impl AppState {
                         codexu_core::readers::HistoryReadError::Unavailable.into(),
                     ));
                 }
-                BranchResult::History(
-                    CodexDashboardProvider::new(
+                let result = CodexDashboardProvider::new(
+                    &history_source.codex_root,
+                    &history_source.cache_dir,
+                )
+                .load_history_snapshot(now)
+                .await;
+                let next = match result {
+                    Ok(next) => next,
+                    Err(error) => return BranchResult::History(Err(error)),
+                };
+                // Persistence belongs to this branch, never to the shared snapshot lock.
+                // A read guard keeps source changes from racing an old summary publication.
+                let config = state.config.read().await;
+                if DashboardSourceKey::from_config(&config) != history_source
+                    || state.source_generation.load(Ordering::SeqCst) != expected_generation
+                {
+                    return BranchResult::History(Err(
+                        codexu_core::readers::HistoryReadError::SourceChanged.into(),
+                    ));
+                }
+                let summary_write_failed = if state.before_branch("summary").await {
+                    true
+                } else if let Some(dashboard) = next.as_ref() {
+                    crate::history_summary::save(
+                        &state.app_data_dir,
                         &history_source.codex_root,
                         &history_source.cache_dir,
+                        dashboard,
                     )
-                    .load_history_snapshot(now)
-                    .await,
-                )
+                    .await
+                    .is_err()
+                } else {
+                    crate::history_summary::clear(&state.app_data_dir).is_err()
+                };
+                BranchResult::History(Ok((next, summary_write_failed)))
             });
             let state = self.clone();
             let task_root = source.codex_root.clone();
@@ -490,7 +517,7 @@ impl AppState {
                 let mut status = self.refresh_status.write().await;
                 match result {
                     BranchResult::History(result) => match result {
-                        Ok(next) => {
+                        Ok((next, summary_write_failed)) => {
                             dashboard.messages = next
                                 .as_ref()
                                 .map(|d| d.messages.clone())
@@ -509,18 +536,7 @@ impl AppState {
                                 restored: false,
                                 updated_at: Some(now.timestamp_millis()),
                             };
-                            status.summary_write_failed = if next.is_some() {
-                                crate::history_summary::save(
-                                    &self.app_data_dir,
-                                    &source.codex_root,
-                                    &source.cache_dir,
-                                    dashboard,
-                                )
-                                .await
-                                .is_err()
-                            } else {
-                                crate::history_summary::clear(&self.app_data_dir).is_err()
-                            };
+                            status.summary_write_failed = summary_write_failed;
                         }
                         Err(error) => {
                             dashboard
