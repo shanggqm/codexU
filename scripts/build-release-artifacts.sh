@@ -18,6 +18,7 @@ git diff --check
 
 make test-macos-compatibility
 make build >/dev/null
+CODEXU_SKIP_BUILD=1 ./scripts/test-history-index.sh
 build/codexU.app/Contents/MacOS/codexU --self-test-statistics-time-zone
 build/codexU.app/Contents/MacOS/codexU --self-test-token-counter
 build/codexU.app/Contents/MacOS/codexU --self-test-app-server-pipe

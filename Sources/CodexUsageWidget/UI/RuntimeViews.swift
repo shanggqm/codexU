@@ -75,7 +75,8 @@ struct RuntimeStatusMenuView: View {
                     RuntimeSummaryCard(
                         summary: summary(for: scope),
                         isSelected: store.selectedRuntimeScope == scope,
-                        language: language
+                        language: language,
+                        quotaStatus: store.homeStatus(scope: scope, kind: .quota)
                     ) {
                         openRuntime(scope)
                     }
@@ -114,7 +115,7 @@ struct RuntimeStatusMenuView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("codexU")
                     .font(.system(size: 14, weight: .semibold))
-                Text("\(language.text("刷新", "Refreshed")) \(runtimeTimeOnly(store.snapshot.refreshedAt))")
+                Text(store.homeStatusText(kind: .quota, language: language))
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -293,6 +294,7 @@ struct RuntimeSummaryCard: View {
     let summary: RuntimeMenuSummary
     let isSelected: Bool
     let language: WidgetLanguage
+    var quotaStatus: HomeLoadStatus? = nil
     let onOpen: () -> Void
 
     var body: some View {
@@ -304,7 +306,7 @@ struct RuntimeSummaryCard: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.primary)
                     Spacer()
-                    Text(summary.status.localized(language))
+                    Text(quotaStatus?.label(language, kind: .quota) ?? summary.status.localized(language))
                         .font(.system(size: 10, weight: .bold))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
@@ -440,6 +442,7 @@ struct RuntimeSummaryCard: View {
     }
 
     private var quotaUnavailableTitle: String {
+        if let quotaStatus, quotaStatus.isWaiting { return quotaStatus.label(language, kind: .quota) }
         switch summary.status {
         case .available:
             return language.text("当前无额度限制", "No active quota limits")
@@ -455,6 +458,7 @@ struct RuntimeSummaryCard: View {
     }
 
     private var quotaUnavailableDetail: String {
+        if let quotaStatus, quotaStatus.isWaiting { return language.text("额度单独更新", "Quota updates independently") }
         switch summary.status {
         case .available:
             return language.text("服务端未返回活动额度窗口", "No active quota window was returned")
@@ -465,7 +469,7 @@ struct RuntimeSummaryCard: View {
         case .stale:
             return language.text("打开 Runtime 获取最新快照", "Open the runtime for a fresh snapshot")
         case .unavailable:
-            return language.text("请检查登录状态或数据源", "Check sign-in and the data source")
+            return language.text("可点击刷新重试", "Refresh to retry")
         }
     }
 

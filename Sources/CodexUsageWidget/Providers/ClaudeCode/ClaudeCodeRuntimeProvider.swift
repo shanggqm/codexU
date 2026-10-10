@@ -5,20 +5,46 @@ struct ClaudeCodeRuntimeProvider: RuntimeUsageProvider {
 
     func loadSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot {
         var messages: [String] = []
+        let local = loadLocalUsage(context: context, messages: &messages)
+        let statusLine = ClaudeCodeStatusLineSnapshotReader().load(context: context, messages: &messages)
+        let taskBoard = ClaudeCodeTaskReader().loadTaskBoard(context: context, messages: &messages)
+        return makeSnapshot(context: context, local: local, statusLine: statusLine, taskBoard: taskBoard, messages: messages)
+    }
+
+    func loadQuotaSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot {
+        var messages: [String] = []
+        let statusLine = ClaudeCodeStatusLineSnapshotReader().load(context: context, messages: &messages)
+        return makeSnapshot(context: context, local: nil, statusLine: statusLine, taskBoard: nil, messages: messages)
+    }
+
+    func loadLocalSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot {
+        var messages: [String] = []
+        let local = loadLocalUsage(context: context, messages: &messages)
+        let statusLine = ClaudeStatusLineSnapshot(exists: false, capturedAt: nil, primary: nil, secondary: nil, isStale: false)
+        return makeSnapshot(context: context, local: local, statusLine: statusLine, taskBoard: nil, messages: messages)
+    }
+
+    private func loadLocalUsage(context: RuntimeLoadContext, messages: inout [String]) -> LocalUsage? {
         let transcriptLocal = ClaudeCodeTranscriptReader().loadLocalUsage(context: context, messages: &messages)
         let statsFallback = ClaudeCodeStatsCacheReader().loadFallbackLocalUsage(context: context, messages: &messages)
         let globalSkills = ClaudeCodeGlobalStateReader().loadSkillUsages(context: context, messages: &messages)
-        let statusLine = ClaudeCodeStatusLineSnapshotReader().load(context: context, messages: &messages)
-        let taskBoard = ClaudeCodeTaskReader().loadTaskBoard(context: context, messages: &messages)
         let local = mergeClaudeLocalUsage(transcriptLocal ?? statsFallback, globalSkills: globalSkills)
-
         if local == nil {
             messages.append("暂无 Claude Code 本机用量记录")
         }
+        return local
+    }
 
+    private func makeSnapshot(
+        context: RuntimeLoadContext,
+        local: LocalUsage?,
+        statusLine: ClaudeStatusLineSnapshot,
+        taskBoard: TaskBoard?,
+        messages: [String]
+    ) -> RuntimeUsageSnapshot {
         let status = makeStatus(local: local, statusLine: statusLine)
         let snapshot = UsageSnapshot(
-            refreshedAt: context.now,
+            refreshedAt: local == nil ? (statusLine.capturedAt ?? context.now) : context.now,
             account: AccountInfo(type: "local", planType: "Claude Code", emailPresent: false),
             limitId: scope.runtimeId,
             limitName: "Claude Code local",
@@ -139,7 +165,7 @@ private final class ClaudeCodeTranscriptReader {
         }.sorted { $0.path < $1.path }
     }
 
-    private func parseTranscript(file: URL, fingerprint: ClaudeFileFingerprint) -> ClaudeTranscriptSummary {
+    fileprivate func parseTranscript(file: URL, fingerprint: ClaudeFileFingerprint) -> ClaudeTranscriptSummary {
         let sessionId = file.deletingPathExtension().lastPathComponent
         var summary = ClaudeTranscriptSummary(
             filePath: file.path,
@@ -631,7 +657,7 @@ private final class ClaudeCodeTranscriptReader {
             .appendingPathComponent("session-usage-v1.json")
     }
 
-    private func fingerprint(for file: URL) -> ClaudeFileFingerprint? {
+    fileprivate func fingerprint(for file: URL) -> ClaudeFileFingerprint? {
         guard let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else {
             return nil
         }
@@ -743,13 +769,29 @@ private final class ClaudeCodeGlobalStateReader {
 }
 
 private final class ClaudeCodeStatusLineSnapshotReader {
+    private let maximumSnapshotBytes = 256 * 1_024
+
     func load(context: RuntimeLoadContext, messages: inout [String]) -> ClaudeStatusLineSnapshot {
         let url = context.cacheDirectory
             .appendingPathComponent("claude-code", isDirectory: true)
             .appendingPathComponent("statusline-snapshot.json")
-        guard let data = try? Data(contentsOf: url) else {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]) else {
             messages.append("额度需要 Claude Code active session 快照")
             return ClaudeStatusLineSnapshot(exists: false, capturedAt: nil, primary: nil, secondary: nil, isStale: false)
+        }
+        guard values.isRegularFile == true,
+              let size = values.fileSize,
+              size <= maximumSnapshotBytes,
+              let handle = try? FileHandle(forReadingFrom: url) else {
+            messages.append("Claude Code statusLine 快照不可读取或超过大小上限")
+            return ClaudeStatusLineSnapshot(exists: true, capturedAt: nil, primary: nil, secondary: nil, isStale: false)
+        }
+        defer { try? handle.close() }
+        // Bound the read as well as metadata to handle growth between stat and read.
+        guard let data = try? handle.read(upToCount: maximumSnapshotBytes + 1),
+              data.count <= maximumSnapshotBytes else {
+            messages.append("Claude Code statusLine 快照不可读取或超过大小上限")
+            return ClaudeStatusLineSnapshot(exists: true, capturedAt: nil, primary: nil, secondary: nil, isStale: false)
         }
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             messages.append("Claude Code statusLine 快照无法解析")
@@ -757,7 +799,7 @@ private final class ClaudeCodeStatusLineSnapshotReader {
         }
 
         let capturedAt = claudeDateValue(object["capturedAt"]) ?? claudeDateValue(object["captured_at"])
-        let isStale = capturedAt.map { context.now.timeIntervalSince($0) > 900 } ?? false
+        let isStale = capturedAt.map { context.now.timeIntervalSince($0) > 900 } ?? true
         if isStale {
             messages.append("Claude Code 快照已过期，打开 Claude Code 后刷新")
         }
@@ -959,7 +1001,7 @@ private struct ClaudeTranscriptSummary: Codable {
     var skillLoads: [ClaudeSkillLoad]
 }
 
-private struct ClaudeUsageDelta: Codable {
+struct ClaudeUsageDelta: Codable {
     let messageId: String?
     let date: Date
     let tokens: TokenBreakdown
@@ -968,7 +1010,7 @@ private struct ClaudeUsageDelta: Codable {
     let sessionId: String
 }
 
-private struct ClaudeSkillLoad: Codable {
+struct ClaudeSkillLoad: Codable {
     let name: String
     let path: String?
     let date: Date?
@@ -1164,12 +1206,7 @@ private func claudeEstimatedCostUSD(tokens: TokenBreakdown, model: String?) -> D
 }
 
 private func claudeDayKey(_ date: Date, calendar: Calendar = .current) -> String {
-    let formatter = DateFormatter()
-    formatter.calendar = calendar
-    formatter.timeZone = calendar.timeZone
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.dateFormat = "yyyy-MM-dd"
-    return formatter.string(from: date)
+    statisticsDayKey(date, calendar: calendar)
 }
 
 private func claudeShortWorkspaceName(_ path: String) -> String {
@@ -1178,7 +1215,7 @@ private func claudeShortWorkspaceName(_ path: String) -> String {
     return trimmed.split(separator: "/").last.map(String.init) ?? path
 }
 
-private func claudeToolCategory(for name: String) -> String {
+func claudeToolCategory(for name: String) -> String {
     let normalized = name.lowercased()
     if normalized.contains("bash") || normalized.contains("shell") || normalized.contains("terminal") {
         return "terminal"
@@ -1270,4 +1307,121 @@ private func maxDate(_ lhs: Date?, _ rhs: Date?) -> Date? {
     case (nil, nil):
         return nil
     }
+}
+
+
+struct ClaudeIndexCheckpoint: Codable {
+    var cursor = UsageStreamCursor()
+    var model: String?
+    var project: String?
+    var leaderProject: String?
+    var firstTimestamp: Date?
+    var lastTimestamp: Date?
+    var usedFallbackTimestamp = false
+}
+
+struct ClaudeIndexBatch: Codable {
+    let checkpoint: ClaudeIndexCheckpoint
+    let deltas: [ClaudeUsageDelta]
+    let tools: [String: Int]
+    let skills: [ClaudeSkillLoad]
+    let intervals: [LeadershipInterval]
+    let readBytes: Int
+    let reachedTarget: Bool
+    let awaitingNewline: Bool
+}
+
+enum ClaudeIncrementalAdapter {
+    static func read(url: URL, targetEnd: UInt64, checkpoint: ClaudeIndexCheckpoint,
+                     modificationDate: Date, maximumLines: Int = 200) throws -> ClaudeIndexBatch {
+        var next = checkpoint
+        if next.project == nil { next.project = inferClaudeProjectPath(from: url) }
+        var deltas: [ClaudeUsageDelta] = []
+        var tools: [String: Int] = [:]
+        var skills: [ClaudeSkillLoad] = []
+        var intervals: [LeadershipInterval] = []
+        let session = url.deletingPathExtension().lastPathComponent
+        let fileID = session.replacingOccurrences(of: "agent-", with: "")
+        let subagent = url.path.contains("/subagents/")
+        let worker = subagent ? "claude:subagent:\(fileID)" : "claude:main:\(fileID)"
+        let result = try UsageStreamParser.read(url: url, targetEnd: targetEnd, cursor: next.cursor, maximumLines: maximumLines) { data, _ in
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            if next.leaderProject == nil { next.leaderProject = claudeStringValue(object["cwd"]) }
+            let timestamp = claudeDateValue(object["timestamp"])
+            if let timestamp {
+                next.firstTimestamp = min(next.firstTimestamp ?? timestamp, timestamp)
+                next.lastTimestamp = max(next.lastTimestamp ?? timestamp, timestamp)
+                if !subagent, object["subtype"] as? String == "turn_duration",
+                   let duration = (object["durationMs"] as? NSNumber)?.doubleValue, duration.isFinite, duration > 0 {
+                    intervals.append(LeadershipInterval(id: "claude:\(fileID):\(timestamp.timeIntervalSince1970)",
+                        workerID: worker, runtime: .claudeCode, workerKind: .main,
+                        projectID: UsageLeadershipAdapter.projectID(runtime: "claude-code", path: next.leaderProject ?? ""),
+                        startAt: timestamp.addingTimeInterval(-duration / 1000), endAt: timestamp, quality: .fact, isAutonomous: false))
+                }
+            }
+            guard let line = String(data: data, encoding: .utf8),
+                  line.contains("\"usage\"") || line.contains("\"tool_use\"") || line.contains("attribution") else { return }
+            let message = object["message"] as? [String: Any]
+            let date = timestamp ?? modificationDate
+            if timestamp == nil { next.usedFallbackTimestamp = true }
+            next.project = claudeStringValue(object["cwd"]) ?? claudeStringValue(object["projectPath"]) ?? next.project
+            next.model = claudeStringValue(message?["model"]) ?? claudeStringValue(object["model"]) ?? next.model
+            if let name = claudeStringValue(object["attributionSkill"]) ?? claudeStringValue(object["attribution_skill"])
+                ?? claudeStringValue(message?["attributionSkill"]) ?? claudeStringValue(message?["attribution_skill"]) {
+                skills.append(ClaudeSkillLoad(name: name, path: nil, date: date))
+            }
+            // Tool/skill events intentionally precede message-ID usage deduplication in the writer.
+            for item in message?["content"] as? [[String: Any]] ?? [] {
+                if item["type"] as? String == "tool_use", let name = claudeStringValue(item["name"]), !name.isEmpty {
+                    guard name.utf8.count <= 256 else { throw UsageIndexError.resourceLimited }
+                    tools[name, default: 0] += 1
+                    if name.lowercased().contains("skill") { skills.append(ClaudeSkillLoad(name: name, path: nil, date: date)) }
+                }
+            }
+            guard let usage = message?["usage"] as? [String: Any] else { return }
+            let input = claudeInt64Value(usage["input_tokens"]) ?? 0
+            let creation = claudeInt64Value(usage["cache_creation_input_tokens"]) ?? 0
+            let cached = claudeInt64Value(usage["cache_read_input_tokens"]) ?? 0
+            let output = claudeInt64Value(usage["output_tokens"]) ?? 0
+            let reasoning = claudeInt64Value(usage["reasoning_output_tokens"]) ?? 0
+            func sum(_ values: [Int64]) throws -> Int64 {
+                var result: Int64 = 0
+                for value in values {
+                    let next = result.addingReportingOverflow(value)
+                    guard !next.overflow else { throw UsageIndexError.resourceLimited }; result = next.partialValue
+                }
+                return result
+            }
+            let total = try claudeInt64Value(usage["total_tokens"]) ?? sum([input, creation, cached, output, reasoning])
+            let tokens = try TokenBreakdown(inputTokens: sum([input, creation, cached]), cachedInputTokens: sum([creation, cached]),
+                outputTokens: output, reasoningOutputTokens: reasoning, totalTokens: total)
+            if tokens.isZero { return }
+            let id = claudeStringValue(message?["id"]) ?? claudeStringValue(object["uuid"]) ?? claudeStringValue(object["id"])
+            guard (id?.utf8.count ?? 0) <= 1024, (next.project?.utf8.count ?? 0) <= 16384,
+                  (next.model?.utf8.count ?? 0) <= 256 else { throw UsageIndexError.resourceLimited }
+            deltas.append(ClaudeUsageDelta(messageId: id, date: date, tokens: tokens, model: next.model,
+                                          projectPath: next.project ?? "", sessionId: session))
+        }
+        next.cursor = result.cursor
+        if subagent, let start = next.firstTimestamp, let end = next.lastTimestamp, end.timeIntervalSince(start) >= 1 {
+            intervals.append(LeadershipInterval(id: "claude:\(fileID):lifecycle", workerID: worker, runtime: .claudeCode,
+                workerKind: .subagent, projectID: UsageLeadershipAdapter.projectID(runtime: "claude-code", path: next.leaderProject ?? ""),
+                startAt: start, endAt: end, quality: .derived, isAutonomous: true))
+        }
+        return ClaudeIndexBatch(checkpoint: next, deltas: deltas, tools: tools, skills: skills, intervals: intervals,
+            readBytes: result.readBytes, reachedTarget: result.reachedTarget, awaitingNewline: result.awaitingNewline)
+    }
+}
+
+func priceArchivedClaude(tokens: TokenBreakdown, model: String?) -> PricedTokenUsage {
+    PricedTokenUsage(tokens: tokens, estimatedCostUSD: claudeEstimatedCostUSD(tokens: tokens, model: model),
+                    usesReferencePricing: claudeModelPrice(for: model) == nil)
+}
+
+
+func claudeHistoryIndexOracle(url: URL) -> (deltas: [ClaudeUsageDelta], tools: [String: Int], skills: [ClaudeSkillLoad])? {
+    let reader = ClaudeCodeTranscriptReader()
+    guard let fingerprint = reader.fingerprint(for: url) else { return nil }
+    let summary = reader.parseTranscript(file: url, fingerprint: fingerprint)
+    return (summary.deltas, summary.toolCalls, summary.skillLoads)
 }

@@ -50,4 +50,13 @@ final class MultiRuntimeUsageReader {
         PerformanceMonitor.shared.end(span, success: board != nil)
         return board
     }
+
+    func loadQuota(scope: RuntimeScope, context: RuntimeLoadContext) -> RuntimeUsageSnapshot? {
+        registry.provider(for: scope)?.loadQuotaSnapshot(context: context)
+    }
+
+    // The caller serializes local loads: legacy analytics caches have one owner.
+    func loadLocal(scope: RuntimeScope, context: RuntimeLoadContext) -> RuntimeUsageSnapshot? {
+        registry.provider(for: scope)?.loadLocalSnapshot(context: context)
+    }
 }

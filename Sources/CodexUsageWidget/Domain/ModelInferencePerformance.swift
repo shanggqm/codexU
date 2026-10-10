@@ -136,7 +136,7 @@ struct ModelInferenceHistoryArchive: Equatable, Codable {
     }
 }
 
-struct ModelInferenceCallTracker {
+struct ModelInferenceCallTracker: Codable {
     private var activeModel: String?
     private var activeEffort: String?
     private var callStartedAt: Date?

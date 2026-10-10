@@ -29,7 +29,21 @@ struct RuntimeLoadContext {
 protocol RuntimeUsageProvider {
     var scope: RuntimeScope { get }
     func loadSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot
+    func loadQuotaSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot
+    func loadLocalSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot
     func loadTaskBoard(context: RuntimeLoadContext) -> TaskBoard?
+}
+
+extension RuntimeUsageProvider {
+    // Compatibility for external/test providers; production providers override both
+    // methods so quota requests never enter the history parsing path.
+    func loadQuotaSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot {
+        loadSnapshot(context: context)
+    }
+
+    func loadLocalSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot {
+        loadSnapshot(context: context)
+    }
 }
 
 struct RuntimeProviderRegistry {
@@ -63,6 +77,18 @@ struct CodexRuntimeProvider: RuntimeUsageProvider {
 
     func loadSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot {
         let snapshot = CodexUsageReader().load(context: context)
+        return runtimeSnapshot(snapshot)
+    }
+
+    func loadQuotaSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot {
+        runtimeSnapshot(CodexUsageReader().loadQuota(context: context))
+    }
+
+    func loadLocalSnapshot(context: RuntimeLoadContext) -> RuntimeUsageSnapshot {
+        runtimeSnapshot(CodexUsageReader().loadLocal(context: context))
+    }
+
+    private func runtimeSnapshot(_ snapshot: UsageSnapshot) -> RuntimeUsageSnapshot {
         let status: RuntimeMenuStatus
         if snapshot.quotaReadSucceeded {
             status = .available

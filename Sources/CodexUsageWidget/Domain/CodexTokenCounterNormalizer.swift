@@ -97,7 +97,7 @@ enum CodexForkUsageDeduplicator {
     }
 }
 
-struct CodexTokenCounterState {
+struct CodexTokenCounterState: Codable {
     var cumulative: TokenBreakdown?
 }
 

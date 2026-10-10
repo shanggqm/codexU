@@ -4,7 +4,7 @@
 
 ## 全网首推：AI 领导力评估模型
 
-codexU v1.3.1 在 AI 领导力模型之外提供本机推理性能监测，并补齐独立 Windows x86_64 Tauri Dashboard。所有数据仍在本机处理，并与既有额度、用量和任务口径保持独立。
+codexU v1.3.2 修复 ChatGPT 升级后的 macOS 额度读取，并通过本地增量索引、首页摘要恢复和过期报告回收改善历史统计加载。继续提供独立 Windows x86_64 Tauri Dashboard，所有用量和任务数据仍在本机处理。
 
 - **一眼看懂 AI 组织规模**：主视觉同时展示领导力得分、28 天领导 Agent 数、AI 工时和峰值并发；轨道节点随今日 Agent 动态运行。
 - **不是靠 token 刷分**：只使用本机可验证或可推导的 Agent 生命周期、父子关系、并发与自主运行证据；不可靠的成本、交付和估算区间不进入得分。
@@ -13,7 +13,7 @@ codexU v1.3.1 在 AI 领导力模型之外提供本机推理性能监测，并�
 - **本地优先、隐私优先**：评分全程在 Mac 本机完成，不上传 usage、线程、路径、日志或账户数据。
 
 > [!IMPORTANT]
-> **建议升级到 v1.3.1 或更高版本。** v1.3.1 补齐 Windows x86_64 Dashboard，并包含本机推理性能监测和聚合边界修复。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
+> **建议升级到 v1.3.2 或更高版本。** v1.3.2 兼容新版 ChatGPT 的内嵌程序布局，修复 macOS 历史缓存回收和完整统计保留问题。[下载最新版本](https://github.com/shanggqm/codexU/releases/latest)。
 
 [产品官网](https://shanggqm.github.io/codexU-site/) · [下载最新版本](https://github.com/shanggqm/codexU/releases/latest) · [English](README.en.md)
 
@@ -21,10 +21,10 @@ codexU 是一个 macOS 菜单栏与桌面应用，用来查看 OpenAI Codex / Ch
 
 ## Windows 版本已发布
 
-当前 Windows x86_64 桌面版本随 [GitHub v1.3.1 Release](https://github.com/shanggqm/codexU/releases/tag/v1.3.1) 提供，并包含完整的独立 Tauri Dashboard；安装包提供 MSI 与 NSIS 两种方式：
+当前 Windows x86_64 桌面版本随 [GitHub v1.3.2 Release](https://github.com/shanggqm/codexU/releases/tag/v1.3.2) 提供，并包含完整的独立 Tauri Dashboard；安装包提供 MSI 与 NSIS 两种方式：
 
-- `codexU-1.3.1-windows-x86_64.msi`：适合通过 Windows Installer 安装。
-- `codexU-1.3.1-windows-x86_64-setup.exe`：适合通过 NSIS 安装向导安装。
+- `codexU-1.3.2-windows-x86_64.msi`：适合通过 Windows Installer 安装。
+- `codexU-1.3.2-windows-x86_64-setup.exe`：适合通过 NSIS 安装向导安装。
 - 支持 Windows 10/11 x86_64；Windows ARM64 当前尚未打包。
 - 验证环境说明：本轮 Windows V0 的原生视觉矩阵与 shell lifecycle 验收在按 build `26200` 归类的 Windows 11 环境完成；Windows 10 仍是支持目标，但未在本轮实机观测。
 - Windows 版本读取 `%USERPROFILE%\.codex\` 等本机数据，保持本地优先和隐私边界，不上传 usage、线程、路径、日志或账户数据。
@@ -205,16 +205,17 @@ make release-all
 产物会写入 `dist/`，例如：
 
 ```text
-dist/codexU-1.3.1-mac-arm64.dmg
-dist/codexU-1.3.1-mac-arm64.dmg.sha256
-dist/codexU-1.3.1-mac-x86_64.dmg
-dist/codexU-1.3.1-mac-x86_64.dmg.sha256
+dist/codexU-1.3.2-mac-arm64.dmg
+dist/codexU-1.3.2-mac-arm64.dmg.sha256
+dist/codexU-1.3.2-mac-x86_64.dmg
+dist/codexU-1.3.2-mac-x86_64.dmg.sha256
 ```
 
 Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTION.md)。
 
 ## 数据来源
 
+- 可执行程序：按应用标识定位 ChatGPT/Codex，兼容新版内嵌 `codex-cli/CodexCLI.app`、`codex-cli/bin/codex`、旧版内嵌程序和常规 CLI 安装路径。
 - 账户与额度：`codex app-server` 的 `account/read`、`account/rateLimits/read`、`account/usage/read`。
 - 本机 token 总量：`~/.codex/state_5.sqlite`。
 - 精细 token 拆分：`~/.codex/sessions/**/rollout-*.jsonl` 和 `~/.codex/archived_sessions/*.jsonl` 中的 `token_count` 事件。
@@ -244,6 +245,10 @@ Developer ID 签名和 Apple notarization 流程见 [DISTRIBUTION.md](DISTRIBUTI
 ### 为什么显示的是剩余百分比，而不是绝对额度？
 
 当前 Codex 本地 API 暴露的是滚动窗口已用百分比和重置时间，不暴露绝对额度数量，所以 codexU 展示的是 5 小时和 7 天窗口的剩余百分比。
+
+### 为什么打开后部分统计仍在补全？
+
+首页会先恢复同一统计日、时区和数据来源的本地摘要，额度、任务分别刷新；“上次结果”表示缓存值。完整历史仍在后台整理，缓存摘要不包含完整图表明细。历史读取现使用本地 SQLite 增量索引：首次后台整理，后续从检查点处理追加内容，按统计日保存可修订的归档。完整清单尚未覆盖、文件暂时不可读或记录超出可处理边界时，会保留上次结果并标记补全中，不把缺失伪造成 0。过期且未发布的中间报告会分批回收，保留当前发布结果和使用中的版本；缓存满、索引占用或读取失败会显示具体状态。窗口 5 秒目标仍需在可操作的真实桌面环境逐项验收，不能用后台或模型计时代替。
 
 ### 支持 Intel Mac 吗？
 

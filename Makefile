@@ -50,7 +50,7 @@ build: test-leadership-assets
 		-o "$(MACOS_DIR)/$(APP_NAME)" \
 		-framework Cocoa \
 		-framework Carbon \
-		-framework SwiftUI
+		-framework SwiftUI -lsqlite3
 	codesign $(CODESIGN_FLAGS) "$(APP_DIR)"
 	codesign --verify --deep --strict "$(APP_DIR)"
 
@@ -59,6 +59,13 @@ run: build
 
 probe: build
 	"$(MACOS_DIR)/$(APP_NAME)" --dump-json
+
+.PHONY: test-home-startup
+test-home-startup: build
+	"$(MACOS_DIR)/$(APP_NAME)" --self-test-home-startup
+	"$(MACOS_DIR)/$(APP_NAME)" --self-test-home-snapshot
+	"$(MACOS_DIR)/$(APP_NAME)" --self-test-runtime-fast-sources
+	"$(MACOS_DIR)/$(APP_NAME)" --self-test-home-task-reader
 
 test-rate-limits:
 	./scripts/test-rate-limits.sh
@@ -200,3 +207,7 @@ clean:
 
 clean-dist:
 	rm -rf "$(DIST_DIR)"
+
+.PHONY: test-history-index
+test-history-index:
+	./scripts/test-history-index.sh

@@ -1,6 +1,6 @@
 import Foundation
 
-enum RuntimeScope: String, CaseIterable, Identifiable, Codable, Equatable {
+enum RuntimeScope: String, CaseIterable, Identifiable, Codable, Equatable, Hashable {
     case codex
     case claudeCode
 
