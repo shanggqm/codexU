@@ -12076,6 +12076,11 @@ extension AppDelegate {
             }
             app.updateWindows()
         }
+        func expectFocus(_ window: NSWindow, _ message: String) {
+            let deadline = Date(timeIntervalSinceNow: 3)
+            repeat { settle() } while !(app.isActive && window.isKeyWindow) && Date() < deadline
+            expect(window.isVisible && window.isKeyWindow && app.isActive, message)
+        }
         func closeItem() -> NSMenuItem? {
             app.windowsMenu?.items.first { $0.action == #selector(NSWindow.performClose(_:)) }
         }
@@ -12098,12 +12103,12 @@ extension AppDelegate {
         }
 
         delegate.showMainWindow()
-        settle()
+        expectFocus(mainWindow, "initial main window must have focus")
         mainWindow.standardWindowButton(.closeButton)?.performClick(nil)
         expect(!mainWindow.isVisible, "red close button must hide main window")
+        settle() // Deliver accessory/deactivation events before the next user action.
         delegate.toggleMainWindow() // Same entry point used by the global Cmd+U handler.
-        settle()
-        expect(mainWindow.isVisible && mainWindow.isKeyWindow, "main window must reopen and focus")
+        expectFocus(mainWindow, "main window must reopen and focus")
 
         for language in [WidgetLanguage.en, .zh, .en] {
             delegate.settings.language = language
@@ -12124,25 +12129,22 @@ extension AppDelegate {
             expect(commandW(mainWindow), "Command+W must be handled from text field")
             expect(!mainWindow.isVisible && app.activationPolicy() == .accessory,
                    "Command+W must hide main window and leave background app running")
+            settle() // Closing and reopening are separate AppKit event turns.
             delegate.toggleMainWindow()
-            settle()
-            expect(mainWindow.isVisible && mainWindow.isKeyWindow,
-                   "hidden main window must reopen via toggle")
+            expectFocus(mainWindow, "hidden main window must reopen via toggle")
         }
 
         // These are the actual auxiliary windows; their stores remain unstarted.
         delegate.openSettingsWindow()
-        settle()
         if let settingsWindow = delegate.settingsWindow {
-            expect(settingsWindow.isKeyWindow, "settings window must have focus")
+            expectFocus(settingsWindow, "settings window must have focus")
             expect(commandW(settingsWindow), "Command+W must close focused settings window")
             expect(!settingsWindow.isVisible && mainWindow.isVisible,
                    "closing settings must preserve main window")
         }
         delegate.openPaletteLibraryWindow()
-        settle()
         if let paletteWindow = delegate.paletteLibraryWindow {
-            expect(paletteWindow.isKeyWindow, "palette window must have focus")
+            expectFocus(paletteWindow, "palette window must have focus")
             expect(commandW(paletteWindow), "Command+W must close focused palette window")
             expect(!paletteWindow.isVisible && mainWindow.isVisible,
                    "closing palette library must preserve main window")
@@ -12165,7 +12167,11 @@ extension AppDelegate {
         if failures.isEmpty && CommandLine.arguments.contains("--verify-window-close-exit") {
             delegate.settings.keepRunningWhenMainWindowClosed = false
             delegate.showMainWindow()
-            settle()
+            expectFocus(mainWindow, "main window must have focus before exit")
+            guard failures.isEmpty else {
+                failures.forEach { print("window close self-test failed: \($0)") }
+                return false
+            }
             // The script requires this marker, exit 0 and absence of the failure marker.
             print("window close self-test: requesting real application termination")
             fflush(stdout)

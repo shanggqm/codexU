@@ -17,8 +17,8 @@ clang -fblocks -dynamiclib tests/window-close/BeepObserver.m \
   -framework AppKit -framework AudioToolbox -o "$ROOT/BeepObserver.dylib"
 clang -fblocks -DBEEP_OBSERVER_CONTROL tests/window-close/BeepObserver.m \
   -framework AppKit -framework AudioToolbox -o "$ROOT/control"
-export DYLD_INSERT_LIBRARIES="$ROOT/BeepObserver.dylib"
-"$ROOT/control" > "$ROOT/control.log" 2>&1
+# Keep the observer out of system utilities (which can use a different ABI).
+DYLD_INSERT_LIBRARIES="$ROOT/BeepObserver.dylib" "$ROOT/control" > "$ROOT/control.log" 2>&1
 cat "$ROOT/control.log"
 [[ $(grep -c '^WINDOW_CLOSE_ALERT ' "$ROOT/control.log") -eq 2 ]] || {
   echo 'window close sound observer positive controls failed'; exit 1;
@@ -28,7 +28,7 @@ APP=build/codexU.app/Contents/MacOS/codexU
 for mode in background exit; do
   args=(--self-test-window-close)
   if [[ "$mode" == exit ]]; then args+=(--verify-window-close-exit); fi
-  "$APP" "${args[@]}" > "$ROOT/$mode.log" 2>&1 || {
+  DYLD_INSERT_LIBRARIES="$ROOT/BeepObserver.dylib" "$APP" "${args[@]}" > "$ROOT/$mode.log" 2>&1 || {
     cat "$ROOT/$mode.log"; exit 1;
   }
   cat "$ROOT/$mode.log"
