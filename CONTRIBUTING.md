@@ -25,6 +25,18 @@ Run the global shortcut validation and exclusive-conflict self-test:
 build/codexU.app/Contents/MacOS/codexU --self-test-global-shortcut
 ```
 
+Run the native window-close regression (requires a macOS GUI session):
+
+```sh
+make test-window-close
+```
+
+This uses synthetic windows and isolated settings/caches, leaves data readers and
+the global shortcut registration stopped, and checks the real menu responder chain,
+background/reopen behavior, auxiliary-window focus, language rebuilds, disabled
+Close states, real process termination, and alert calls with positive controls.
+After an existing build, use `./scripts/test-window-close.sh --skip-build`.
+
 Run palette package validation and rendering tests:
 
 ```sh

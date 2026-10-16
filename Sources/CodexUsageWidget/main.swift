@@ -11458,6 +11458,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         mainMenu.addItem(windowMenuItem)
         let windowMenu = NSMenu(title: language.text("窗口", "Window"))
         windowMenuItem.submenu = windowMenu
+        let closeItem = NSMenuItem(
+            title: language.text("关闭", "Close"),
+            action: #selector(NSWindow.performClose(_:)),
+            keyEquivalent: "w"
+        )
+        closeItem.keyEquivalentModifierMask = .command
+        // A nil target lets the focused window use its existing close policy.
+        windowMenu.addItem(closeItem)
         let minimizeItem = NSMenuItem(
             title: language.text("最小化", "Minimize"),
             action: #selector(NSWindow.performMiniaturize(_:)),
@@ -12025,6 +12033,154 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
     }
 }
 
+// Exercise the real menu, responder chain and close policy without starting readers,
+// registering the global hotkey, or loading user window geometry.
+extension AppDelegate {
+    static func runWindowCloseSelfTest() -> Bool {
+        guard let isolatedHome = ProcessInfo.processInfo.environment["CFFIXED_USER_HOME"],
+              FileManager.default.homeDirectoryForCurrentUser.path == isolatedHome,
+              FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].path
+                .hasPrefix(isolatedHome + "/") else {
+            print("window close self-test requires scripts/test-window-close.sh for isolation")
+            return false
+        }
+        let app = NSApplication.shared
+        app.setActivationPolicy(.regular)
+        app.finishLaunching()
+        let suite = "codexU.window-close-self-test.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else { return false }
+        let delegate = AppDelegate()
+        delegate.settings = AppSettings(defaults: defaults)
+        delegate.settings.keepRunningWhenMainWindowClosed = true
+        delegate.settings.automaticUpdateChecksEnabled = false
+        let mainWindow = MainAppWindow(contentRect: NSRect(x: 100, y: 100, width: 320, height: 200))
+        mainWindow.delegate = delegate
+        // A synthetic text field also checks routing through a field editor.
+        let field = NSTextField(string: "Synthetic window close test")
+        field.frame = NSRect(x: 20, y: 80, width: 280, height: 24)
+        mainWindow.contentView?.addSubview(field)
+        delegate.window = mainWindow
+        delegate.observeSettings()
+        var failures: [String] = []
+        func expect(_ condition: Bool, _ message: String) {
+            if !condition { failures.append(message) }
+        }
+        func settle() {
+            let deadline = Date(timeIntervalSinceNow: 0.3)
+            // A Foundation run loop alone does not deliver AppKit activation events.
+            while Date() < deadline {
+                if let event = app.nextEvent(matching: .any, until: deadline,
+                                             inMode: .default, dequeue: true) {
+                    app.sendEvent(event)
+                }
+            }
+            app.updateWindows()
+        }
+        func closeItem() -> NSMenuItem? {
+            app.windowsMenu?.items.first { $0.action == #selector(NSWindow.performClose(_:)) }
+        }
+        func commandW(_ window: NSWindow) -> Bool {
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: .command, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, characters: "w",
+                charactersIgnoringModifiers: "w", isARepeat: false, keyCode: 13)!
+            return app.mainMenu?.performKeyEquivalent(with: event) ?? false
+        }
+        defer {
+            delegate.cancellables.removeAll()
+            delegate.settingsWindow?.orderOut(nil)
+            delegate.paletteLibraryWindow?.orderOut(nil)
+            mainWindow.orderOut(nil)
+            if let item = delegate.statusItem { NSStatusBar.system.removeStatusItem(item) }
+            app.mainMenu = nil
+            app.windowsMenu = nil
+            defaults.removePersistentDomain(forName: suite)
+        }
+
+        delegate.showMainWindow()
+        settle()
+        mainWindow.standardWindowButton(.closeButton)?.performClick(nil)
+        expect(!mainWindow.isVisible, "red close button must hide main window")
+        delegate.toggleMainWindow() // Same entry point used by the global Cmd+U handler.
+        settle()
+        expect(mainWindow.isVisible && mainWindow.isKeyWindow, "main window must reopen and focus")
+
+        for language in [WidgetLanguage.en, .zh, .en] {
+            delegate.settings.language = language
+            settle() // Rebuild via the production language observer.
+            guard let item = closeItem() else {
+                print("window close self-test failed: Close menu item missing")
+                return false
+            }
+            expect(item.title == language.text("关闭", "Close"), "Close title must follow language")
+            expect(item.target == nil, "Close must use responder chain")
+            expect(item.keyEquivalent == "w" && item.keyEquivalentModifierMask == .command,
+                   "Close must use Command+W")
+            expect(app.windowsMenu?.items.filter { $0.action == item.action }.count == 1,
+                   "menu rebuild must not duplicate Close")
+            mainWindow.makeFirstResponder(field)
+            app.windowsMenu?.update()
+            expect(item.isEnabled, "Close must be enabled for main window")
+            expect(commandW(mainWindow), "Command+W must be handled from text field")
+            expect(!mainWindow.isVisible && app.activationPolicy() == .accessory,
+                   "Command+W must hide main window and leave background app running")
+            delegate.toggleMainWindow()
+            settle()
+            expect(mainWindow.isVisible && mainWindow.isKeyWindow,
+                   "hidden main window must reopen via toggle")
+        }
+
+        // These are the actual auxiliary windows; their stores remain unstarted.
+        delegate.openSettingsWindow()
+        settle()
+        if let settingsWindow = delegate.settingsWindow {
+            expect(settingsWindow.isKeyWindow, "settings window must have focus")
+            expect(commandW(settingsWindow), "Command+W must close focused settings window")
+            expect(!settingsWindow.isVisible && mainWindow.isVisible,
+                   "closing settings must preserve main window")
+        }
+        delegate.openPaletteLibraryWindow()
+        settle()
+        if let paletteWindow = delegate.paletteLibraryWindow {
+            expect(paletteWindow.isKeyWindow, "palette window must have focus")
+            expect(commandW(paletteWindow), "Command+W must close focused palette window")
+            expect(!paletteWindow.isVisible && mainWindow.isVisible,
+                   "closing palette library must preserve main window")
+        }
+        mainWindow.orderOut(nil)
+        settle()
+        app.windowsMenu?.update()
+        expect(closeItem()?.isEnabled == false, "Close must be disabled with no window")
+
+        let nonclosable = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 200, height: 100),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        nonclosable.isReleasedWhenClosed = false
+        nonclosable.makeKeyAndOrderFront(nil)
+        app.activate(ignoringOtherApps: true)
+        settle()
+        app.windowsMenu?.update()
+        expect(closeItem()?.isEnabled == false, "Close must be disabled for nonclosable window")
+        nonclosable.orderOut(nil)
+
+        if failures.isEmpty && CommandLine.arguments.contains("--verify-window-close-exit") {
+            delegate.settings.keepRunningWhenMainWindowClosed = false
+            delegate.showMainWindow()
+            settle()
+            // The script requires this marker, exit 0 and absence of the failure marker.
+            print("window close self-test: requesting real application termination")
+            fflush(stdout)
+            _ = commandW(mainWindow)
+            print("window close self-test failed: termination returned")
+            return false
+        }
+        if failures.isEmpty {
+            print("window close self-test passed: red button, Cmd+W, background/reopen, focus, language rebuild, disabled state")
+        }
+        failures.forEach { print("window close self-test failed: \($0)") }
+        return failures.isEmpty
+    }
+}
+
 @main
 struct codexUMain {
     static func main() {
@@ -12033,6 +12189,9 @@ struct codexUMain {
         }
         if CommandLine.arguments.contains("--probe-history-index") {
             exit(UsageHistoryProbe.run() ? 0 : 1)
+        }
+        if CommandLine.arguments.contains("--self-test-window-close") {
+            exit(AppDelegate.runWindowCloseSelfTest() ? 0 : 1)
         }
         if CommandLine.arguments.contains("--self-test-global-shortcut") {
             exit(GlobalShortcutSelfTest.run() ? 0 : 1)

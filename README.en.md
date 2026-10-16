@@ -58,6 +58,7 @@ A [Windows adaptation](docs/WINDOWS.en.md), built with Tauri + Rust, provides a 
 ## Keyboard Shortcuts
 
 - `Command + U`: shows or hides the main window by default and can be customized in Settings. If the window is minimized, the shortcut restores it and brings it forward.
+- `Command + W`: closes the focused window. The main window follows the close preference: hide and keep running by default, or quit when background running is disabled.
 - Custom combinations require at least two modifiers, including Command or Control; known high-risk system and accessibility shortcuts are rejected.
 - Press Backspace while recording to clear the shortcut, or Escape to cancel; you can restore the default or record another shortcut later.
 - The app detects conflicts with other exclusive hotkey registrations. macOS does not provide a complete query for nonexclusive registrations, so choose another combination if another app still conflicts.

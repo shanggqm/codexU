@@ -55,6 +55,10 @@ build: test-leadership-assets
 	codesign $(CODESIGN_FLAGS) "$(APP_DIR)"
 	codesign --verify --deep --strict "$(APP_DIR)"
 
+.PHONY: test-window-close
+test-window-close: build
+	./scripts/test-window-close.sh --skip-build
+
 run: build
 	open "$(APP_DIR)"
 
