@@ -76,6 +76,97 @@ enum UsageStreamParserSelfTest {
             let repeated = try helper.parse(UsageParseRequest(id: UUID().uuidString, path: fixture.path,
                 targetEnd: UInt64(fixtureBytes), checkpoint: parsed.batch.checkpoint, previousStamp: parsed.stamp))
             try check(repeated.batch.readBytes == 0 && repeated.batch.deltas.isEmpty)
+            if let zstd = UsageCompressedSource.executableURL {
+                let plain = root.appendingPathComponent("compressed.jsonl")
+                let packed = plain.appendingPathExtension("zst")
+                func compress(_ bytes: Data) throws {
+                    try bytes.write(to: plain)
+                    try? FileManager.default.removeItem(at: packed)
+                    guard FileManager.default.createFile(atPath: packed.path, contents: nil,
+                        attributes: [.posixPermissions: 0o600]) else { throw UsageIndexError.diskFull }
+                    let output = try FileHandle(forWritingTo: packed)
+                    defer { try? output.close() }
+                    let process = Process()
+                    process.executableURL = zstd
+                    process.arguments = ["--compress", "--stdout", "--quiet", "--", plain.path]
+                    process.standardOutput = output; process.standardError = FileHandle.nullDevice
+                    try process.run(); process.waitUntilExit()
+                    guard process.terminationStatus == 0 else { throw UsageIndexError.cacheInvalid }
+                }
+                let original = try Data(contentsOf: fixture)
+                var multiple = Data()
+                for _ in 0..<60 { multiple.append(original) }
+                try compress(multiple)
+                try check(!UsageParseHelper.isCompressedSource(path: plain.path))
+                var expectedState = CodexIndexCheckpoint(), expectedDeltas: [SessionUsageDelta] = []
+                repeat {
+                    let value = try UsageStreamParser.readCodex(url: plain, targetEnd: UInt64(multiple.count),
+                        checkpoint: expectedState)
+                    expectedDeltas += value.deltas; expectedState = value.checkpoint
+                } while expectedState.cursor.offset < multiple.count
+                try FileManager.default.removeItem(at: plain)
+                try check(UsageParseHelper.isCompressedSource(path: plain.path))
+                try check(UsageParseHelper.isCompressedSource(path: packed.path))
+                let directory = root.appendingPathComponent("mirror")
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                    attributes: [.posixPermissions: 0o700])
+                let mirror = UsageCompressedSource(directory: directory)
+                let physical = try UsageCompressedSource.fingerprint(packed)
+                let prepared = try mirror.prepare(packed, physical: physical)
+                let preparedStamp = try UsageFileStamp.capture(url: prepared, committedOffset: UInt64(multiple.count))
+                try check(try mirror.prepare(packed, physical: physical) == prepared)
+                try check(try UsageFileStamp.capture(url: prepared, committedOffset: UInt64(multiple.count)) == preparedStamp)
+                try check((try FileManager.default.attributesOfItem(atPath: prepared.path)[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+                mirror.release(ifPlaintextSource: fixture)
+                try check(FileManager.default.fileExists(atPath: prepared.path))
+                mirror.release(ifPlaintextSource: plain)
+                try check(!FileManager.default.fileExists(atPath: prepared.path))
+                let restored = try mirror.prepare(packed, physical: physical)
+                try check(UsageCompressedSource.stamp(try UsageFileStamp.capture(url: restored,
+                    committedOffset: UInt64(multiple.count)), physical: physical)
+                    == UsageCompressedSource.stamp(preparedStamp, physical: physical))
+                mirror.release()
+                var state = CodexIndexCheckpoint(), prior: UsageFileStamp?
+                var compressedDeltas: [SessionUsageDelta] = [], batches = 0
+                repeat {
+                    let value = try helper.parse(UsageParseRequest(id: UUID().uuidString, path: plain.path,
+                        targetEnd: UInt64(multiple.count), checkpoint: state, previousStamp: prior))
+                    try check(value.stamp.size == multiple.count && !value.requiresRebuild)
+                    compressedDeltas += value.batch.deltas; state = value.batch.checkpoint; prior = value.stamp
+                    batches += 1; try check(batches < 30)
+                    if batches == 1 {
+                        let live = try helper.parse(request)
+                        try check(encoder.encode(live.batch.deltas) == encoder.encode(whole.deltas))
+                    }
+                } while state.cursor.offset < multiple.count
+                try check(batches > 1 && encoder.encode(compressedDeltas) == encoder.encode(expectedDeltas))
+                let restarted = UsageParseHelper()
+                let zero = try restarted.parse(UsageParseRequest(id: UUID().uuidString, path: packed.path,
+                    targetEnd: UInt64(multiple.count), checkpoint: state, previousStamp: prior))
+                try check(zero.batch.readBytes == 0 && zero.batch.deltas.isEmpty && zero.stamp == prior)
+                try compress(original)
+                try FileManager.default.removeItem(at: plain)
+                let replaced = try restarted.parse(UsageParseRequest(id: UUID().uuidString, path: plain.path,
+                    targetEnd: UInt64(multiple.count), checkpoint: state, previousStamp: prior))
+                try check(replaced.requiresRebuild && replaced.stamp.size == original.count)
+                try original.write(to: plain)
+                let restoredPlain = try restarted.parse(UsageParseRequest(id: UUID().uuidString, path: plain.path,
+                    targetEnd: UInt64(original.count), checkpoint: replaced.batch.checkpoint, previousStamp: replaced.stamp))
+                try check(restoredPlain.requiresRebuild && restoredPlain.batch.readBytes == 0 && restoredPlain.batch.deltas.isEmpty)
+                let resumedPlain = try restarted.parse(UsageParseRequest(id: UUID().uuidString, path: plain.path,
+                    targetEnd: UInt64(original.count), checkpoint: restoredPlain.batch.checkpoint, previousStamp: restoredPlain.stamp))
+                try check(!resumedPlain.requiresRebuild && encoder.encode(resumedPlain.batch.deltas) == encoder.encode(whole.deltas))
+                let corrupt = root.appendingPathComponent("corrupt.jsonl.zst")
+                try Data("invalid compressed source".utf8).write(to: corrupt)
+                do {
+                    _ = try restarted.parse(UsageParseRequest(id: UUID().uuidString, path: corrupt.path,
+                        targetEnd: 0, checkpoint: CodexIndexCheckpoint(), previousStamp: nil))
+                    throw UsageIndexError.databaseFailure
+                } catch UsageIndexError.cacheInvalid {}
+                print("history compressed: path migration, mirror reuse/release, logical checkpoint restart and corrupt source passed")
+            } else {
+                throw UsageIndexError.resourceLimited
+            }
             let frozen = root.appendingPathComponent("frozen.jsonl")
             try Data("first\npart".utf8).write(to: frozen)
             try check(UsageFileStamp.completingBoundary(url: frozen, frozenEnd: 10) == nil)

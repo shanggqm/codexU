@@ -129,6 +129,7 @@ codexU 需要读取本机 `~/.codex/` 下的 Codex 数据；如果启用 Claude 
 - 本机已安装 Codex。
 - 已登录 Codex 账户，额度信息才会显示。
 - Codex 至少使用过一次，以便生成 `~/.codex/state_5.sqlite`。
+- macOS 压缩会话日志（`.jsonl.zst`）需要 `brew install zstd`，使用 `/opt/homebrew/bin/zstd` 或 `/usr/local/bin/zstd`；原日志只读，临时副本解析后删除。
 - Claude Code 统计为可选能力；历史 token 来自 `~/.claude/projects/**/*.jsonl`，额度需要本地 statusLine snapshot cache。
 - 从源码构建时需要 Xcode Command Line Tools。
 

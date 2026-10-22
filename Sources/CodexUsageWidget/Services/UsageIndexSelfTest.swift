@@ -72,6 +72,35 @@ enum UsageIndexSelfTest {
             store = nil
             store = try UsageIndexStore(directory: root)
             try check(store!.scalar("SELECT count(*) FROM revision") == 1)
+            let now = Date()
+            for (id, locator) in [("compressed", "one.jsonl.zst"), ("reserved", "two.jsonl.zst"), ("live", "live.jsonl")] {
+                _ = try store!.registerSource(id: id, root: "fixture", runtime: "codex",
+                    logicalID: id, locator: locator, now: now)
+                try store!.enqueueSource(id, priority: 1, now: now.addingTimeInterval(id == "live" ? -2 : -1))
+            }
+            // Live work can interrupt a compressed continuation without borrowing another slot's mirror.
+            try store!.execute("UPDATE index_meta SET value='0' WHERE key='scheduler-step'")
+            guard let live = try store!.claimJob(now: now, continuing: "compressed") else {
+                throw UsageIndexError.databaseFailure
+            }
+            try check(live.source == "live")
+            try store!.finishJob(live, more: false, now: now)
+            guard let continuation = try store!.claimJob(now: now, continuing: "compressed", excluding: "reserved") else {
+                throw UsageIndexError.databaseFailure
+            }
+            try check(continuation.source == "compressed")
+            try store!.finishJob(continuation, more: true, now: now)
+            try check(store!.claimJob(now: now, continuing: "compressed", excluding: "compressed") == nil)
+            // A slot without a mirror may still claim an unreserved compressed source.
+            guard let other = try store!.claimJob(now: now, excluding: "compressed") else {
+                throw UsageIndexError.databaseFailure
+            }
+            try check(other.source == "reserved")
+            try store!.finishJob(other, more: false, now: now)
+            try store!.execute("UPDATE job SET priority=2 WHERE source_id='compressed'")
+            try store!.enqueueSource("live", priority: 1, now: now)
+            try store!.execute("UPDATE index_meta SET value='0' WHERE key='scheduler-step'")
+            try check(store!.claimJob(now: now, avoiding: "live", continuing: "compressed")?.source == "live")
             try store!.execute("PRAGMA user_version=999")
             store = nil
             do { _ = try UsageIndexStore(directory: root); return false } catch UsageIndexError.unsupportedSchema {}

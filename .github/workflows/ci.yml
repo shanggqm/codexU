@@ -11,8 +11,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Install history parser dependency
+        run: brew install zstd
       - name: Build
         run: make build
+      - name: History index and compressed session tests
+        run: build/codexU.app/Contents/MacOS/codexU --self-test-history-index
       - name: Model pricing catalog and calculation tests
         run: build/codexU.app/Contents/MacOS/codexU --self-test-model-pricing
       - name: Runtime executable detection and fast source tests

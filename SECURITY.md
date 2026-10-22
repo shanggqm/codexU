@@ -23,6 +23,7 @@ codexU reads:
 - `~/.codex/automations/**/automation.toml`
 - local responses from `codex app-server`
 - `~/.codex/sessions/**/rollout-*.jsonl` and `~/.codex/archived_sessions/*.jsonl` token metadata
+- their `.jsonl.zst` compressed equivalents, decoded locally with zstd into private, bounded temporary files removed after parsing
 - `~/.claude/projects/**/*.jsonl` assistant `message.usage` and `tool_use.name` metadata
 - `~/.claude/tasks/**/*.json` task status/title metadata
 - optional `~/Library/Caches/codexU/claude-code/statusline-snapshot.json`

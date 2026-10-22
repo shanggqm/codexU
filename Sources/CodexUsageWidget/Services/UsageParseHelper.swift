@@ -36,13 +36,19 @@ final class UsageParseHelper {
     private var input: FileHandle?
     private var output: FileHandle?
     private var ownsGroup = false
+    private var temporaryDirectory: URL?
 
     deinit { terminate() }
 
-    func parse(_ request: UsageParseRequest, timeout: Double = 5) throws -> UsageParseResponse {
+    static func isCompressedSource(path: String, runtime: String = "codex") -> Bool {
+        runtime == "codex" && UsageCompressedSource.resolve(path: path, runtime: runtime).pathExtension == "zst"
+    }
+
+    func parse(_ request: UsageParseRequest, timeout: Double? = nil) throws -> UsageParseResponse {
         let encoded = try JSONEncoder().encode(request)
         guard encoded.count + 1 <= Self.maximumFrame else { throw UsageIndexError.resourceLimited }
-        let deadline = ProcessInfo.processInfo.systemUptime + min(max(timeout, 0), 5)
+        let maximum: Double = Self.isCompressedSource(path: request.path, runtime: request.runtime) ? 60 : 5
+        let deadline = ProcessInfo.processInfo.systemUptime + min(max(timeout ?? maximum, 0), maximum)
         do {
             try start()
             guard let input, let output, let process else { throw UsageIndexError.resourceLimited }
@@ -96,12 +102,16 @@ final class UsageParseHelper {
                 guard input != nil, output != nil else { throw UsageIndexError.resourceLimited }
                 return
             }
-            self.process = nil
+            terminate()
         }
         guard let executable = Bundle.main.executableURL else { throw UsageIndexError.resourceLimited }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("codexu-parser-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        temporaryDirectory = directory
         let child = Process()
         child.executableURL = executable
-        child.arguments = ["--usage-parse-helper"]
+        child.arguments = ["--usage-parse-helper", "--usage-helper-directory", directory.path]
         let incoming = Pipe(), outgoing = Pipe()
         child.standardInput = incoming; child.standardOutput = outgoing; child.standardError = FileHandle.nullDevice
         try child.run()
@@ -119,7 +129,7 @@ final class UsageParseHelper {
         }
     }
 
-    private func terminate() {
+    func terminate() {
         if let process, process.isRunning {
             let pid = process.processIdentifier
             if getpgid(pid) == pid { ownsGroup = true }
@@ -127,12 +137,19 @@ final class UsageParseHelper {
             else { _ = Darwin.kill(pid, SIGKILL) }
         }
         try? input?.close(); try? output?.close(); input = nil; output = nil
+        if let directory = temporaryDirectory { try? FileManager.default.removeItem(at: directory) }
+        temporaryDirectory = nil
         // Retain a still-running process in this slot. It must not trigger unlimited respawns.
         if process?.isRunning == false { process = nil }
     }
 
     static func runChild() -> Int32 {
         guard setpgid(0, 0) == 0 || getpgrp() == getpid() else { return 2 }
+        var directory: URL?
+        if let index = CommandLine.arguments.firstIndex(of: "--usage-helper-directory"), index + 1 < CommandLine.arguments.count {
+            directory = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+        }
+        let compressed = UsageCompressedSource(directory: directory)
         var pending = Data()
         do {
             var incoming = [UInt8](repeating: 0, count: 32 * 1024)
@@ -149,61 +166,7 @@ final class UsageParseHelper {
                     let request = try JSONDecoder().decode(UsageParseRequest.self, from: pending.prefix(length))
                     pending.removeSubrange(pending.startIndex...newline)
                     do {
-                        guard request.path.utf8.count <= 16384, request.id.utf8.count <= 128 else { throw UsageIndexError.resourceLimited }
-                        let url = URL(fileURLWithPath: request.path)
-                        let metadata = try UsageFileStamp.capture(url: url, committedOffset: 0)
-                        var before = metadata
-                        var rebuild = request.forceRebuild || request.targetEnd > metadata.size
-                            || (request.previousStamp.map { $0.size > metadata.size } ?? false)
-                        if !rebuild {
-                            before = try UsageFileStamp.capture(url: url, committedOffset: request.checkpoint.cursor.offset)
-                            if let previous = request.previousStamp {
-                                rebuild = !previous.validatesPrefix(of: before)
-                                    || (previous.size == before.size && (previous.modifiedSeconds != before.modifiedSeconds
-                                        || previous.modifiedNanoseconds != before.modifiedNanoseconds))
-                            }
-                        }
-                        if request.claudeCheckpoint?.usedFallbackTimestamp == true, let previous = request.previousStamp,
-                           previous.modifiedSeconds != metadata.modifiedSeconds || previous.modifiedNanoseconds != metadata.modifiedNanoseconds {
-                            rebuild = true
-                        }
-                        var boundary: UInt64?
-                        if request.finishFrozenTail, !rebuild {
-                            if request.checkpoint.cursor.largeProjection != nil,metadata.size>request.targetEnd {
-                                // A streamed oversized tail can advance in bounded pieces even when
-                                // its closing newline has not yet arrived.
-                                do { boundary = try UsageFileStamp.completingBoundary(url:url,frozenEnd:request.targetEnd) }
-                                catch UsageIndexError.resourceLimited { boundary = nil }
-                                if boundary == nil { boundary = min(metadata.size,request.targetEnd+UInt64(UsageStreamParser.batchBytes)) }
-                            } else {
-                                boundary = try UsageFileStamp.completingBoundary(url: url, frozenEnd: request.targetEnd)
-                            }
-                        }
-                        let parser = rebuild ? CodexIndexCheckpoint() : request.checkpoint
-                        let target = rebuild ? 0 : request.targetEnd
-                        guard target <= metadata.size else { throw UsageIndexError.sourceChanged }
-                        let frozenStamp = try UsageFileStamp.capture(url: url, committedOffset: target)
-                        let batch: CodexIndexBatch
-                        var claude: ClaudeIndexBatch?
-                        if request.runtime == "codex" {
-                            batch = try UsageStreamParser.readCodex(url: url, targetEnd: target, checkpoint: parser, maximumLines: 200)
-                        } else if request.runtime == "claude-code" {
-                            let state = rebuild ? ClaudeIndexCheckpoint() : (request.claudeCheckpoint ?? ClaudeIndexCheckpoint())
-                            let parsed = try ClaudeIncrementalAdapter.read(url: url, targetEnd: target, checkpoint: state,
-                                modificationDate: Date(timeIntervalSince1970: Double(metadata.modifiedSeconds) + Double(metadata.modifiedNanoseconds) / 1_000_000_000))
-                            claude = parsed
-                            var common = CodexIndexCheckpoint(); common.cursor = parsed.checkpoint.cursor
-                            batch = CodexIndexBatch(checkpoint: common, deltas: [], inferenceSamples: [], toolCalls: [:], skillLoads: [],
-                                readBytes: parsed.readBytes, reachedTarget: parsed.reachedTarget, awaitingNewline: parsed.awaitingNewline)
-                        } else { throw UsageIndexError.cacheInvalid }
-                        let stamp = try UsageFileStamp.capture(url: url, committedOffset: batch.checkpoint.cursor.offset)
-                        let verifiedTarget = try UsageFileStamp.capture(url: url, committedOffset: target)
-                        guard frozenStamp.validatesPrefix(of: verifiedTarget), metadata.identity == stamp.identity,
-                              stamp.size >= metadata.size,
-                              stamp.size > metadata.size || (metadata.modifiedSeconds == stamp.modifiedSeconds
-                                && metadata.modifiedNanoseconds == stamp.modifiedNanoseconds) else { throw UsageIndexError.sourceChanged }
-                        let data = try JSONEncoder().encode(UsageParseResponse(batch: batch, stamp: stamp, claude: claude,
-                            requiresRebuild: rebuild, completedBoundary: boundary))
+                        let data = try JSONEncoder().encode(read(request, compressed: compressed))
                         guard data.count <= maximumResponse else { throw UsageIndexError.resourceLimited }
                         var offset = 0
                         while offset < data.count {
@@ -221,6 +184,86 @@ final class UsageParseHelper {
             }
             return 0
         } catch { return 1 }
+    }
+
+    private static func read(_ request: UsageParseRequest, compressed: UsageCompressedSource) throws -> UsageParseResponse {
+        guard request.path.utf8.count <= 16384, request.id.utf8.count <= 128 else { throw UsageIndexError.resourceLimited }
+        let source = UsageCompressedSource.resolve(path: request.path, runtime: request.runtime)
+        let physical = request.runtime == "codex" && source.pathExtension == "zst" ? try UsageCompressedSource.fingerprint(source) : nil
+        if let physical, let previous = request.previousStamp,
+           previous.identity == UsageCompressedSource.identity(physical), !request.forceRebuild,
+           request.targetEnd == previous.size, request.checkpoint.cursor.offset == request.targetEnd,
+           !request.finishFrozenTail, !request.checkpoint.cursor.skippingOversizedLine {
+            guard try UsageCompressedSource.fingerprint(source) == physical else { throw UsageIndexError.sourceChanged }
+            compressed.release()
+            let batch = CodexIndexBatch(checkpoint: request.checkpoint, deltas: [], inferenceSamples: [], toolCalls: [:],
+                skillLoads: [], readBytes: 0, reachedTarget: true, awaitingNewline: false)
+            return UsageParseResponse(batch: batch, stamp: previous)
+        }
+        let url: URL
+        if let physical { url = try compressed.prepare(source, physical: physical) }
+        else { compressed.release(ifPlaintextSource: source); url = source }
+        func capture(_ offset: UInt64) throws -> UsageFileStamp {
+            let logical = try UsageFileStamp.capture(url: url, committedOffset: offset)
+            return physical.map { UsageCompressedSource.stamp(logical, physical: $0) } ?? logical
+        }
+        let metadata = try capture(0)
+        var before = metadata
+        var rebuild = request.forceRebuild || request.targetEnd > metadata.size
+            || (request.previousStamp.map { $0.size > metadata.size } ?? false)
+        if !rebuild {
+            before = try capture(request.checkpoint.cursor.offset)
+            if let previous = request.previousStamp {
+                rebuild = !previous.validatesPrefix(of: before)
+                    || (previous.size == before.size && (previous.modifiedSeconds != before.modifiedSeconds
+                        || previous.modifiedNanoseconds != before.modifiedNanoseconds))
+            }
+        }
+        if request.claudeCheckpoint?.usedFallbackTimestamp == true, let previous = request.previousStamp,
+           previous.modifiedSeconds != metadata.modifiedSeconds || previous.modifiedNanoseconds != metadata.modifiedNanoseconds {
+            rebuild = true
+        }
+        var boundary: UInt64?
+        if request.finishFrozenTail, !rebuild {
+            if request.checkpoint.cursor.largeProjection != nil,metadata.size>request.targetEnd {
+                // A streamed oversized tail can advance in bounded pieces even when
+                // its closing newline has not yet arrived.
+                do { boundary = try UsageFileStamp.completingBoundary(url:url,frozenEnd:request.targetEnd) }
+                catch UsageIndexError.resourceLimited { boundary = nil }
+                if boundary == nil { boundary = min(metadata.size,request.targetEnd+UInt64(UsageStreamParser.batchBytes)) }
+            } else {
+                boundary = try UsageFileStamp.completingBoundary(url: url, frozenEnd: request.targetEnd)
+            }
+        }
+        let parser = rebuild ? CodexIndexCheckpoint() : request.checkpoint
+        let target = rebuild ? 0 : request.targetEnd
+        guard target <= metadata.size else { throw UsageIndexError.sourceChanged }
+        let frozenStamp = try capture(target)
+        let batch: CodexIndexBatch
+        var claude: ClaudeIndexBatch?
+        if request.runtime == "codex" {
+            batch = try UsageStreamParser.readCodex(url: url, targetEnd: target, checkpoint: parser, maximumLines: 200)
+        } else if request.runtime == "claude-code" {
+            let state = rebuild ? ClaudeIndexCheckpoint() : (request.claudeCheckpoint ?? ClaudeIndexCheckpoint())
+            let parsed = try ClaudeIncrementalAdapter.read(url: url, targetEnd: target, checkpoint: state,
+                modificationDate: Date(timeIntervalSince1970: Double(metadata.modifiedSeconds) + Double(metadata.modifiedNanoseconds) / 1_000_000_000))
+            claude = parsed
+            var common = CodexIndexCheckpoint(); common.cursor = parsed.checkpoint.cursor
+            batch = CodexIndexBatch(checkpoint: common, deltas: [], inferenceSamples: [], toolCalls: [:], skillLoads: [],
+                readBytes: parsed.readBytes, reachedTarget: parsed.reachedTarget, awaitingNewline: parsed.awaitingNewline)
+        } else { throw UsageIndexError.cacheInvalid }
+        let stamp = try capture(batch.checkpoint.cursor.offset)
+        let verifiedTarget = try capture(target)
+        guard frozenStamp.validatesPrefix(of: verifiedTarget), metadata.identity == stamp.identity,
+              stamp.size >= metadata.size,
+              stamp.size > metadata.size || (metadata.modifiedSeconds == stamp.modifiedSeconds
+                && metadata.modifiedNanoseconds == stamp.modifiedNanoseconds) else { throw UsageIndexError.sourceChanged }
+        if let physical {
+            guard try UsageCompressedSource.fingerprint(source) == physical else { throw UsageIndexError.sourceChanged }
+            if batch.reachedTarget && !batch.awaitingNewline && target == metadata.size { compressed.release() }
+        }
+        return UsageParseResponse(batch: batch, stamp: stamp, claude: claude,
+            requiresRebuild: rebuild, completedBoundary: boundary)
     }
 
     private static func send(_ frame: UsageParseFrame) throws {

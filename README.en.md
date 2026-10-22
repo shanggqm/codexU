@@ -117,6 +117,7 @@ See the [Windows guide](docs/WINDOWS.en.md) for supported features and contribut
 - A local Codex installation.
 - A signed-in Codex account for quota data.
 - Codex must have been used at least once so `~/.codex/state_5.sqlite` exists.
+- On macOS, compressed sessions (`.jsonl.zst`) require `brew install zstd`, using `/opt/homebrew/bin/zstd` or `/usr/local/bin/zstd`. Source logs are read-only; temporary decoded copies are removed after parsing.
 - Claude Code support is optional. Historical tokens come from `~/.claude/projects/**/*.jsonl`; quota requires a local statusLine snapshot cache.
 - Xcode Command Line Tools for building from source.
 

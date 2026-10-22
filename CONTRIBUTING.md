@@ -19,6 +19,13 @@ Build the app:
 make build
 ```
 
+Install `zstd` with Homebrew to parse compressed Codex sessions and run the history index self-tests:
+
+```sh
+brew install zstd
+./scripts/test-history-index.sh
+```
+
 Run the global shortcut validation and exclusive-conflict self-test:
 
 ```sh
@@ -32,7 +39,7 @@ make test-palettes
 ./scripts/test-status-item.sh
 ```
 
-The macOS CI job builds once, then runs the model pricing, runtime executable
+The macOS CI job builds once, then runs the history index, model pricing, runtime executable
 detection and fast source, palette, menu bar, particle animation, rate limit,
 and statistics time zone self-tests directly against
 the same app binary. Each test has its own CI step and fails the job on error.

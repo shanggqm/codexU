@@ -89,7 +89,7 @@ extension UsageIndexStore {
             try execute("""
                 INSERT INTO source_generation(source_id,generation,parser_version,file_identity,checkpoint_offset,
                   observed_end,checkpoint_state,fingerprint,created_at_ms,updated_at_ms)
-                VALUES (?,?,4,?,0,?,?,'',?,?)
+                VALUES (?,?,5,?,0,?,?,'',?,?)
                 """, [.text(source), .integer(generation), .text(identity), .integer(targetEnd), .text(initialState),
                       .integer(try usageIndexMilliseconds(now)), .integer(try usageIndexMilliseconds(now))])
             try execute("INSERT INTO checkpoint_version VALUES (?,?,?,0,?)",

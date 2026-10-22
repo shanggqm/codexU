@@ -67,8 +67,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Install memory gate dependency
-        run: brew install ripgrep
+      - name: Install validation dependencies
+        run: brew install ripgrep zstd
       - name: Build and verify macOS DMGs
         if: inputs.candidate_run == ''
         run: make release-package VERSION="${{ needs.resolve-version.outputs.version }}"

@@ -38,8 +38,9 @@ extension UsageIndexStore {
         try execute("UPDATE job SET status='queued' WHERE status='running'")
     }
 
-    /// Persistent weighted rotation: at least two old-history slots and one maintenance slot per ten claims.
-    func claimJob(now: Date, avoiding source: String? = nil) throws -> UsageIndexJob? {
+    /// Weighted rotation permits live plaintext work while each slot retains one compressed source.
+    func claimJob(now: Date, avoiding source: String? = nil, continuing pinnedSource: String? = nil,
+                  excluding reservedSource: String? = nil) throws -> UsageIndexJob? {
         try transaction {
             let previous = try rows("SELECT value FROM index_meta WHERE key='scheduler-step'", limit: 1).first?.first?.text
             let step = (Int(previous ?? "0") ?? 0) % 10
@@ -48,9 +49,16 @@ extension UsageIndexStore {
             let records = try rows("""
                 SELECT id,source_id,kind,priority,updated_at_ms FROM job
                 WHERE kind='parse' AND source_id IS NOT NULL AND status='queued' AND (retry_at_ms IS NULL OR retry_at_ms<=?)
+                  AND (? IS NULL OR source_id<>?)
+                  AND (? IS NULL OR source_id=? OR EXISTS (
+                    SELECT 1 FROM source WHERE source.id=job.source_id
+                      AND (runtime<>'codex' OR locator NOT LIKE '%.zst')))
                 ORDER BY CASE WHEN priority=? THEN 0 ELSE 1 END,
                   CASE WHEN source_id=? THEN 1 ELSE 0 END,updated_at_ms,id LIMIT 1
-                """, [.integer(timestamp), .integer(Int64(preferred)), source.map(UsageSQLValue.text) ?? .null], limit: 1)
+                """, [.integer(timestamp), reservedSource.map(UsageSQLValue.text) ?? .null,
+                      reservedSource.map(UsageSQLValue.text) ?? .null, pinnedSource.map(UsageSQLValue.text) ?? .null,
+                      pinnedSource.map(UsageSQLValue.text) ?? .null,
+                      .integer(Int64(preferred)), source.map(UsageSQLValue.text) ?? .null], limit: 1)
             guard let row = records.first, let id = row[0].text, let kind = row[2].text,
                   let priority = row[3].integer, let version = row[4].integer else { return nil }
             try execute("UPDATE job SET status='running' WHERE id=? AND status='queued'", [.text(id)])

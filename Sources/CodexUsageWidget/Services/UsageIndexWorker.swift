@@ -22,6 +22,7 @@ final class UsageIndexWorker {
                            DispatchQueue(label: "codexU.index.parse.1", qos: .utility, autoreleaseFrequency: .workItem)]
     private let helpers = [UsageParseHelper(), UsageParseHelper()]
     private var busy = Set<Int>()
+    private var compressedSources: [Int: String] = [:]
     private var store: UsageIndexStore?
     private var materializers: [String: UsageIndexMaterializer] = [:]
     private var dispatchScheduled = false
@@ -77,9 +78,10 @@ final class UsageIndexWorker {
         for source in sources {
             guard ["codex", "claude-code"].contains(source.runtime) else { throw UsageIndexError.cacheInvalid }
             let id = Self.sourceID(root: rootID, logicalID: source.logicalID, runtime: source.runtime)
+            let locator = UsageCompressedSource.resolve(path: source.locator, runtime: source.runtime).path
             try store.registerSource(id: id, root: rootID, runtime: source.runtime,
-                                     logicalID: source.logicalID, locator: source.locator, now: Date())
-            try store.execute("UPDATE source SET locator=? WHERE id=?", [.text(source.locator), .text(id)])
+                                     logicalID: source.logicalID, locator: locator, now: Date())
+            try store.execute("UPDATE source SET locator=? WHERE id=?", [.text(locator), .text(id)])
             let previous = try store.metadata(source: id, revision: Int64.max)
             try store.recordMetadata(source: id, metadata: UsageSourceMetadata(model: source.model,
                 project: source.project, parentLogicalID: previous?.value.parentLogicalID,
@@ -100,7 +102,8 @@ final class UsageIndexWorker {
 
     private func finishStopIfDrained() {
         guard !active, busy.isEmpty else { return }
-        materializers.removeAll(); store = nil
+        for slot in helpers.indices { readers[slot].sync { self.helpers[slot].terminate() } }
+        compressedSources.removeAll(); materializers.removeAll(); store = nil
         let completion = stopping; stopping = nil
         // Execute after callbacks have released their captured database references.
         writer.async { completion?() }
@@ -136,22 +139,35 @@ final class UsageIndexWorker {
                 }
             }
             for slot in readers.indices where !busy.contains(slot) {
-                guard let job = try store.claimJob(now: Date(), avoiding: consecutiveSource >= 2 ? lastSource : nil),
-                      let source = job.source else { break }
+                guard let job = try store.claimJob(now: Date(), avoiding: consecutiveSource >= 2 ? lastSource : nil,
+                                                   continuing: compressedSources[slot],
+                                                   excluding: compressedSources[1 - slot]),
+                      let source = job.source else { continue }
                 if source == lastSource { consecutiveSource += 1 } else { lastSource = source; consecutiveSource = 1 }
                 do {
                 guard let sourceRow = try store.rows("SELECT locator,runtime FROM source WHERE id=?", [.text(source)], limit: 1).first,
-                      let path = sourceRow[0].text, let runtime = sourceRow[1].text else {
+                      let locator = sourceRow[0].text, let runtime = sourceRow[1].text else {
                     throw UsageIndexError.cacheInvalid
+                }
+                let path = UsageCompressedSource.resolve(path: locator, runtime: runtime).path
+                if path != locator { try store.execute("UPDATE source SET locator=? WHERE id=?", [.text(path), .text(source)]) }
+                let compressed = UsageParseHelper.isCompressedSource(path: path, runtime: runtime)
+                if compressed, let pinned = compressedSources[slot], pinned != source {
+                    // A queued locator may have been compressed since discovery; keep the current mirror.
+                    try store.finishJob(job, more: true, now: Date())
+                    scheduleDispatch()
+                    continue
                 }
                 let checkpoint = try store.checkpoint(source: source)
                 let state = try checkpoint.map { try JSONDecoder().decode(UsageIndexedCodexState.self, from: Data($0.state.utf8)) }
+                if compressed { compressedSources[slot] = source }
                 let request = UsageParseRequest(id: UUID().uuidString, path: path,
                     targetEnd: checkpoint.map { UInt64($0.targetEnd) } ?? 0,
                     checkpoint: state?.parser ?? CodexIndexCheckpoint(), previousStamp: state?.stamp,
                     finishFrozenTail: state?.awaitingNewline ?? false, runtime: runtime, claudeCheckpoint: state?.claude,
                     forceRebuild: try checkpoint.map { cp in
-                        (try store.scalar("SELECT parser_version FROM source_generation WHERE source_id=? AND generation=?", [.text(source),.integer(cp.generation)]) ?? 0) < 4
+                        let version = try store.scalar("SELECT parser_version FROM source_generation WHERE source_id=? AND generation=?", [.text(source),.integer(cp.generation)]) ?? 0
+                        return version < 4 || (compressed && version < 5)
                     } ?? false)
                 let requestEpoch = epoch
                 busy.insert(slot)
@@ -166,9 +182,14 @@ final class UsageIndexWorker {
                                 try store.transaction {
                                     try self.commit(response, source: source, checkpoint: checkpoint, job: job)
                                 }
+                                if self.compressedSources[slot] == source,
+                                   (checkpoint != nil && response.batch.reachedTarget && !response.requiresRebuild) || response.batch.awaitingNewline {
+                                    self.compressedSources.removeValue(forKey: slot)
+                                }
                             case .failure(let error): throw error
                             }
                         } catch {
+                            self.compressedSources.removeValue(forKey: slot)
                             let code = error as? UsageIndexError ?? .databaseFailure
                             try? store.observeSource(source: source, identity: checkpoint?.identity ?? "",
                                 targetEnd: checkpoint?.targetEnd ?? 0, status: "unreadable", now: Date())
@@ -186,6 +207,7 @@ final class UsageIndexWorker {
                     }
                 }
                 } catch {
+                    compressedSources.removeValue(forKey: slot)
                     let code = error as? UsageIndexError ?? .cacheInvalid
                     try? store.execute("UPDATE job SET status='error',cursor=? WHERE id=?", [.text("{\"error\":\""+code.rawValue+"\"}"),.text(job.id)])
                     publish(error as? UsageIndexError ?? .cacheInvalid)
